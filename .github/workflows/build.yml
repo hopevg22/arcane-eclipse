@@ -1,4 +1,4 @@
-name: Build NAM Player VST3
+name: Build Arcane Eclipse VST3
 
 on:
   push:
@@ -11,10 +11,10 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: NAMPlayer-Windows-VST3
+            artifact_name: ArcaneEclipse-Windows-VST3
           - os: macos-latest
             generator_arg: "-G Xcode"
-            artifact_name: NAMPlayer-macOS-VST3
+            artifact_name: ArcaneEclipse-macOS-VST3
 
     runs-on: ${{ matrix.os }}
 
@@ -31,13 +31,13 @@ jobs:
           git submodule update --init --recursive
 
       - name: Configure (CMake)
-        run: cmake -B build ${{ matrix.generator_arg }}
+        run: cmake -B build ${{ matrix.generator_arg }} -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-DEIGEN_DONT_VECTORIZE -DEIGEN_NO_CPUID"
 
       - name: Build VST3 (Release)
-        run: cmake --build build --config Release --target NAMPlayer_VST3
+        run: cmake --build build --config Release --target ArcaneEclipse_VST3
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: build/NAMPlayer_artefacts/Release/VST3/*
+          path: build/ArcaneEclipse_artefacts/Release/VST3/*
