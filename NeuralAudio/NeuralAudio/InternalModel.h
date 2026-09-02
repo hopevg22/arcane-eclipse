@@ -1,0 +1,541 @@
+#pragma once
+
+#include "NeuralModel.h"
+#include "NeuralModelImpl.h"
+#include "WaveNet.h"
+#include "WaveNetDynamic.h"
+#include "LSTM.h"
+#include "LSTMDynamic.h"
+
+namespace NeuralAudio
+{
+	using IStdDilations = NeuralAudio::Dilations<1, 2, 4, 8, 16, 32, 64, 128, 256, 512>;
+	using IStdKernelSizes = NeuralAudio::KernelSizes<3, 3, 3, 3, 3, 3, 3, 3, 3, 3>;
+	using ILiteDilations1 = NeuralAudio::Dilations<1, 2, 4, 8, 16, 32, 64>;
+	using ILiteKernelSizes1 = NeuralAudio::KernelSizes<3, 3, 3, 3, 3, 3, 3>;
+	using ILiteDilations2 = NeuralAudio::Dilations<128, 256, 512, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512>;
+	using ILiteKernelSizes2 = NeuralAudio::KernelSizes<3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3>;
+
+	using A2KernelSizes = NeuralAudio::KernelSizes<6, 6, 6, 6, 6, 6, 6, 6,	6, 6, 6, 6,	6, 6, 15, 15, 6, 6,	6, 6, 6, 6,	6>;
+	using A2Dilations = NeuralAudio::Dilations<1, 3, 7, 17, 41, 101, 239, 1, 3, 7, 17, 41, 101, 239, 1, 13, 1, 3, 7, 17, 41, 101, 239>;
+
+	class InternalModel : public NeuralModelImpl
+	{
+	public:
+		bool LoadFromKerasJson(const nlohmann::json& modelJson)
+		{
+			ReadKerasConfig(modelJson);
+
+			return CreateModelFromKerasJson(modelJson);
+		}
+
+		virtual bool CreateModelFromKerasJson(const nlohmann::json& modelJson)
+		{
+			(void)modelJson;
+
+			return false;
+		}
+
+		virtual bool LoadFromNAMJson(const nlohmann::json& modelJson)
+		{
+			ReadNAMConfig(modelJson);
+
+			return CreateModelFromNAMJson(modelJson);
+		}
+
+		virtual bool CreateModelFromNAMJson(const nlohmann::json& modelJson)
+		{
+			(void)modelJson;
+
+			return false;
+		}
+	};
+
+	template <typename ModelType>
+	class InternalWaveNetModelT : public InternalModel
+	{
+	public:
+		InternalWaveNetModelT()
+			: model(nullptr)
+		{
+		}
+
+		~InternalWaveNetModelT()
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+		}
+
+		bool IsStatic() override
+		{
+			return true;
+		}
+
+		bool CreateModelFromNAMJson(const nlohmann::json& modelJson) override
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+
+			model = new ModelType;
+
+			model->SetWeights(modelJson.at("weights"));
+
+			SetMaxAudioBufferSize(loader->GetDefaultMaxAudioBufferSize());
+
+			return true;
+		}
+
+		void SetMaxAudioBufferSize(const int maxSize) override
+		{
+			(void)maxSize;
+		}
+
+		int GetReceptiveFieldSize() override
+		{
+			return model->ReceptiveFieldSize;
+		}
+
+		void Process(float* input, float* output, size_t numSamples) override
+		{
+			size_t offset = 0;
+
+			while (numSamples > 0)
+			{
+				size_t toProcess = std::min(numSamples, model->GetMaxFrames());
+
+				model->Process(input + offset, output + offset, toProcess);
+
+				offset += toProcess;
+				numSamples -= toProcess;
+			}
+		}
+
+		void Prewarm() override
+		{
+			model->Prewarm();
+		}
+
+	private:
+		ModelType* model = nullptr;
+	};
+
+
+	class InternalWaveNetDefinitionBase
+	{
+	public:
+		virtual InternalModel* CreateModel()
+		{
+			return nullptr;
+		}
+
+		virtual size_t GetNumChannels()
+		{
+			return 0;
+		}
+
+		virtual size_t GetHeadSize()
+		{
+			return 0;
+		}
+	};
+
+	template <int NumChannels, int HeadSize>
+	class InternalA1WaveNetDefinitionT : public InternalWaveNetDefinitionBase
+	{
+	public:
+		using ModelType = typename std::conditional<NumChannels == 16,
+			NeuralAudio::WaveNetModelT<float,
+				NeuralAudio::WaveNetLayerArrayT<float, 1, 1, HeadSize, 1, 1, NumChannels, IStdKernelSizes, IStdDilations, false, EActivationType::Tanh>,
+				NeuralAudio::WaveNetLayerArrayT<float, NumChannels, 1, 1, 1, 1, HeadSize, IStdKernelSizes, IStdDilations, true, EActivationType::Tanh>>,
+			NeuralAudio::WaveNetModelT<float,
+				NeuralAudio::WaveNetLayerArrayT<float, 1, 1, HeadSize, 1, 1, NumChannels, ILiteKernelSizes1, ILiteDilations1, false, EActivationType::Tanh>,
+				NeuralAudio::WaveNetLayerArrayT<float, NumChannels, 1, 1, 1, 1, HeadSize, ILiteKernelSizes2, ILiteDilations2, true, EActivationType::Tanh>>
+			>::type;
+
+		InternalModel* CreateModel() override
+		{
+			return new InternalWaveNetModelT<ModelType>;
+		}
+
+		virtual size_t GetNumChannels() override
+		{
+			return NumChannels;
+		}
+
+		virtual size_t GetHeadSize() override
+		{
+			return HeadSize;
+		}
+	};
+
+	class InternalWaveNetModelDyn : public InternalModel
+	{
+	public:
+		InternalWaveNetModelDyn()
+		{
+		}
+
+		~InternalWaveNetModelDyn()
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+		}
+
+		EModelLoadMode GetLoadMode() override
+		{
+			return EModelLoadMode::Internal;
+		}
+
+		bool CreateModelFromNAMJson(const nlohmann::json& modelJson) override
+		{
+			auto& config = modelJson.at("config");
+
+			std::vector<WaveNetLayerArray> layerArrays;
+
+			for (size_t i = 0; i < config.at("layers").size(); i++)
+			{
+				auto& layerConfig = config.at("layers").at(i);
+
+				layerArrays.push_back(WaveNetLayerArray(layerConfig.at("input_size"), layerConfig.at("condition_size"), layerConfig.at("head_size"),
+					layerConfig.at("channels"), layerConfig.at("kernel_size"), layerConfig.at("head_bias"), layerConfig.at("dilations")));
+			}
+
+			model = new WaveNetModel(layerArrays);
+
+			model->SetWeights(modelJson.at("weights"));
+
+			SetMaxAudioBufferSize(loader->GetDefaultMaxAudioBufferSize());
+
+			return true;
+		}
+
+		void SetMaxAudioBufferSize(const int maxSize) override
+		{
+			model->SetMaxFrames(maxSize);
+		}
+
+		void Process(float* input, float* output, size_t numSamples) override
+		{
+			size_t offset = 0;
+
+			while (numSamples > 0)
+			{
+				size_t toProcess = std::min(numSamples, model->GetMaxFrames());
+
+				model->Process(input + offset, output + offset, toProcess);
+
+				offset += toProcess;
+				numSamples -= toProcess;
+			}
+		}
+
+		void Prewarm() override
+		{
+			model->Prewarm();
+		}
+
+	private:
+		WaveNetModel* model = nullptr;
+	};
+
+
+	template <int NumLayers, int HiddenSize>
+	class InternalLSTMModelT : public InternalModel
+	{
+	public:
+		InternalLSTMModelT()
+			: model(nullptr)
+		{
+		}
+
+		~InternalLSTMModelT()
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+		}
+
+		bool IsStatic() override
+		{
+			return true;
+		}
+
+		bool CreateModelFromNAMJson(const nlohmann::json& modelJson) override
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+
+			model = new LSTMModelT<NumLayers, HiddenSize>;
+
+			model->SetNAMWeights(modelJson.at("weights"));
+
+			SetMaxAudioBufferSize(loader->GetDefaultMaxAudioBufferSize());
+
+			return true;
+		}
+
+		std::vector<float> FlattenWeights(const nlohmann::json& weights)
+		{
+			std::vector<float> vec;
+
+			for (size_t i = 0; i < weights.size(); i++)
+			{
+				if (weights[i].is_array())
+				{
+					auto subVec = FlattenWeights(weights[i]);
+					vec.insert(vec.end(), subVec.begin(), subVec.end());
+				}
+				else
+				{
+					vec.push_back(weights[i]);
+				}
+			}
+
+			return vec;
+		}
+
+		bool CreateModelFromKerasJson(const nlohmann::json& modelJson) override
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+
+			model = new LSTMModelT<NumLayers, HiddenSize>;
+
+			const auto layers = modelJson.at("layers");
+			const size_t numLayers = layers.size();
+
+			if (numLayers < 2)
+				return false;
+
+			auto lastLayer = layers[numLayers - 1];
+
+			if (lastLayer.at("type") != "dense")
+				return false;
+
+			LSTMDef lstmDef;
+
+			lstmDef.HeadWeights = FlattenWeights(lastLayer.at("weights").at(0));
+			lstmDef.HeadBias = lastLayer.at("weights").at(1).at(0);
+
+			for (size_t i = 0; i < (numLayers - 1); i++)
+			{
+				auto layer = layers[i];
+
+				if (layer.at("type") != "lstm")
+					return false;
+
+				LSTMLayerDef layerDef;
+
+				layerDef.InputWeights = FlattenWeights(layer.at("weights").at(0));
+				layerDef.HiddenWeights = FlattenWeights(layer.at("weights").at(1));
+				layerDef.BiasWeights = FlattenWeights(layer.at("weights").at(2));
+
+				lstmDef.Layers.push_back(layerDef);
+			}
+
+			model->SetWeights(lstmDef);
+
+			return true;
+		}
+
+		void SetMaxAudioBufferSize(const int maxSize) override
+		{
+			(void)maxSize;
+		}
+
+		void Process(float* input, float* output, size_t numSamples) override
+		{
+			model->Process(input, output, numSamples);
+		}
+
+		void Prewarm() override
+		{
+			NeuralModelImpl::Prewarm(2048, 64);
+		}
+
+	private:
+		LSTMModelT<NumLayers, HiddenSize>* model = nullptr;
+	};
+
+
+	class InternalLSTMDefinitionBase
+	{
+	public:
+		virtual InternalModel* CreateModel()
+		{
+			return nullptr;
+		}
+
+		virtual size_t GetNumLayers()
+		{
+			return 0;
+		}
+
+		virtual size_t GetHiddenSize()
+		{
+			return 0;
+		}
+	};
+
+	template <int NumLayers, int HiddenSize>
+	class InternalLSTMDefinitionT : public InternalLSTMDefinitionBase
+	{
+	public:
+		InternalModel* CreateModel() override
+		{
+			return new InternalLSTMModelT<NumLayers, HiddenSize>;
+		}
+
+		virtual size_t GetNumLayers() override
+		{
+			return NumLayers;
+		}
+
+		virtual size_t GetHiddenSize() override
+		{
+			return HiddenSize;
+		}
+	};
+
+	class InternalLSTMModelDyn : public InternalModel
+	{
+	public:
+		InternalLSTMModelDyn()
+			: model(nullptr)
+		{
+		}
+
+		~InternalLSTMModelDyn()
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+		}
+
+		bool CreateModelFromNAMJson(const nlohmann::json& modelJson) override
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+
+			auto& config = modelJson.at("config");
+
+			model = new LSTMModel(config.at("num_layers"), config.at("hidden_size"));
+
+			model->SetNAMWeights(modelJson.at("weights"));
+
+			SetMaxAudioBufferSize(loader->GetDefaultMaxAudioBufferSize());
+
+			return true;
+		}
+
+		std::vector<float> FlattenWeights(const nlohmann::json& weights)
+		{
+			std::vector<float> vec;
+
+			for (size_t i = 0; i < weights.size(); i++)
+			{
+				if (weights[i].is_array())
+				{
+					auto subVec = FlattenWeights(weights[i]);
+					vec.insert(vec.end(), subVec.begin(), subVec.end());
+				}
+				else
+				{
+					vec.push_back(weights[i]);
+				}
+			}
+
+			return vec;
+		}
+
+		bool CreateModelFromKerasJson(const nlohmann::json& modelJson) override
+		{
+			if (model != nullptr)
+			{
+				delete model;
+				model = nullptr;
+			}
+
+			const auto layers = modelJson.at("layers");
+			const size_t numLayers = layers.size();
+			const size_t hiddenSize = layers.at(0).at("shape").back();
+
+			if (numLayers < 2)
+				return false;
+
+			auto lastLayer = layers[numLayers - 1];
+
+			if (lastLayer.at("type") != "dense")
+				return false;
+
+			model = new LSTMModel(numLayers - 1, hiddenSize);
+
+			LSTMDef lstmDef;
+
+			lstmDef.HeadWeights = FlattenWeights(lastLayer.at("weights").at(0));
+			lstmDef.HeadBias = lastLayer.at("weights").at(1).at(0);
+
+			for (size_t i = 0; i < (numLayers - 1); i++)
+			{
+				auto layer = layers[i];
+
+				if (layer.at("type") != "lstm")
+					return false;
+
+				LSTMLayerDef layerDef;
+
+				layerDef.InputWeights = FlattenWeights(layer.at("weights").at(0));
+				layerDef.HiddenWeights = FlattenWeights(layer.at("weights").at(1));
+				layerDef.BiasWeights = FlattenWeights(layer.at("weights").at(2));
+
+				lstmDef.Layers.push_back(layerDef);
+			}
+
+			model->SetWeights(lstmDef);
+
+			return true;
+		}
+
+		void SetMaxAudioBufferSize(const int maxSize) override
+		{
+			(void)maxSize;
+		}
+
+		void Process(float* input, float* output, size_t numSamples) override
+		{
+			model->Process(input, output, numSamples);
+		}
+
+		void Prewarm() override
+		{
+			NeuralModelImpl::Prewarm(2048, 64);
+		}
+
+	private:
+		LSTMModel* model = nullptr;
+	};
+}
+
+

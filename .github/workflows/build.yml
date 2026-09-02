@@ -1,0 +1,43 @@
+name: Build NAM Player VST3
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: NAMPlayer-Windows-VST3
+          - os: macos-latest
+            generator_arg: "-G Xcode"
+            artifact_name: NAMPlayer-macOS-VST3
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Clone JUCE 8
+        run: git clone --depth 1 --branch 8.0.12 https://github.com/juce-framework/JUCE.git
+
+      - name: Init NeuralAudio submodules
+        run: |
+          cd NeuralAudio
+          git submodule update --init --recursive
+
+      - name: Configure (CMake)
+        run: cmake -B build ${{ matrix.generator_arg }}
+
+      - name: Build VST3 (Release)
+        run: cmake --build build --config Release --target NAMPlayer_VST3
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: build/NAMPlayer_artefacts/Release/VST3/*

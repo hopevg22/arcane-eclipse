@@ -1,0 +1,414 @@
+#include "PluginEditor.h"
+
+static const juce::Colour kOrange { 0xffE8820C };
+
+const juce::String NAMPlayerEditor::kChainLabels[8] =
+    { "GATE","COMP","DRIVE","AMP","CAB","EQ","DELAY","REVERB" };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TransparentKnobLAF  — only draws the indicator arc + pointer, body is clear
+// ═══════════════════════════════════════════════════════════════════════════════
+TransparentKnobLAF::TransparentKnobLAF()
+{
+    setColour(juce::TextButton::buttonColourId,    juce::Colour(0xdde0dcd4));
+    setColour(juce::TextButton::textColourOffId,   juce::Colour(0xff222222));
+    setColour(juce::TextButton::buttonOnColourId,  kOrange);
+    setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    setColour(juce::ComboBox::backgroundColourId,  juce::Colours::white.withAlpha(.9f));
+    setColour(juce::ComboBox::textColourId,        juce::Colour(0xff222222));
+    setColour(juce::ComboBox::outlineColourId,     juce::Colour(0xffcccccc));
+    setColour(juce::Slider::thumbColourId,         kOrange);
+    setColour(juce::Slider::trackColourId,         kOrange);
+    setColour(juce::Slider::backgroundColourId,    juce::Colour(0xffddddcc));
+}
+
+void TransparentKnobLAF::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
+                                           float pos, float startA, float endA, juce::Slider&)
+{
+    auto b = juce::Rectangle<float>((float)x,(float)y,(float)w,(float)h).reduced(3.f);
+    auto c = b.getCentre();
+    float r = juce::jmin(b.getWidth(), b.getHeight()) * 0.5f;
+
+    // Thin track (very subtle — just enough to show range)
+    juce::Path track;
+    track.addCentredArc(c.x,c.y,r*.92f,r*.92f,0,startA,endA,true);
+    g.setColour(juce::Colours::black.withAlpha(.18f));
+    g.strokePath(track, juce::PathStrokeType(2.5f));
+
+    // Orange filled arc
+    if (pos > 0.01f)
+    {
+        juce::Path arc;
+        arc.addCentredArc(c.x,c.y,r*.92f,r*.92f,0,startA,startA+(endA-startA)*pos,true);
+        g.setColour(kOrange);
+        g.strokePath(arc, juce::PathStrokeType(2.5f));
+    }
+
+    // White pointer dot at tip
+    float ang = startA + pos*(endA-startA);
+    float px = c.x + r*.72f*std::sin(ang);
+    float py = c.y - r*.72f*std::cos(ang);
+    g.setColour(juce::Colours::white.withAlpha(.9f));
+    g.fillEllipse(px-3.f, py-3.f, 6.f, 6.f);
+    g.setColour(kOrange.withAlpha(.6f));
+    g.drawEllipse(px-3.f, py-3.f, 6.f, 6.f, 1.f);
+}
+
+void TransparentKnobLAF::drawLabel(juce::Graphics& g, juce::Label& lbl)
+{
+    g.setColour(lbl.findColour(juce::Label::textColourId));
+    g.setFont(lbl.getFont());
+    g.drawFittedText(lbl.getText(), lbl.getLocalBounds(),
+                     lbl.getJustificationType(), 1);
+}
+
+void TransparentKnobLAF::drawButtonBackground(juce::Graphics& g, juce::Button& btn,
+                                               const juce::Colour&, bool, bool isDown)
+{
+    auto bgCol = btn.findColour(juce::TextButton::buttonColourId);
+    // Skip drawing entirely if button is transparent (bg image provides visual)
+    if (bgCol.getAlpha() < 10) return;
+
+    auto b = btn.getLocalBounds().toFloat().reduced(.5f);
+    bool on = btn.getToggleState();
+    g.setColour(isDown||on ? kOrange.withAlpha(.9f) : bgCol);
+    g.fillRoundedRectangle(b, 5.f);
+    g.setColour(juce::Colour(0xffccccbb));
+    g.drawRoundedRectangle(b, 5.f, 1.f);
+}
+
+void TransparentKnobLAF::drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) {}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  AKnob
+// ═══════════════════════════════════════════════════════════════════════════════
+void AKnob::setup(juce::Component* parent, juce::AudioProcessorValueTreeState& apvts,
+                   const juce::String& paramId, TransparentKnobLAF* laf)
+{
+    slider.setLookAndFeel(laf);
+    slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    slider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    parent->addAndMakeVisible(slider);
+    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, paramId, slider);
+
+    valLabel.setJustificationType(juce::Justification::centred);
+    valLabel.setFont(juce::Font(9.f));
+    valLabel.setColour(juce::Label::textColourId, juce::Colour(0xff444444));
+    parent->addAndMakeVisible(valLabel);
+
+    slider.onValueChange = [this]()
+    {
+        valLabel.setText(juce::String(slider.getValue(), 1), juce::dontSendNotification);
+    };
+    slider.onValueChange();
+}
+
+void AKnob::place(int cx, int cy, int sz)
+{
+    slider.setBounds(cx - sz/2, cy - sz/2, sz, sz);
+    // Value labels hidden — background image already shows static values.
+    // Only show live value if it moves significantly from the image default.
+    valLabel.setBounds(cx - 28, cy + sz/2 + 2, 56, 12);
+    valLabel.setVisible(false); // hide by default, shown for amp/fx knobs
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  NAMPlayerEditor
+// ═══════════════════════════════════════════════════════════════════════════════
+NAMPlayerEditor::NAMPlayerEditor(NAMPlayerProcessor& p)
+    : AudioProcessorEditor(&p), proc(p)
+{
+    setLookAndFeel(&laf);
+    setSize(kPlugW, kPlugH);
+
+    // Load background image from BinaryData
+    bgImage = juce::ImageCache::getFromMemory(BinaryData::background_png,
+                                               BinaryData::background_pngSize);
+
+    // ── Strip knobs ──────────────────────────────────────────────────────────
+    kInput .setup(this, p.apvts, NAMPlayerProcessor::idInputGain,  &laf);
+    kGate  .setup(this, p.apvts, NAMPlayerProcessor::idNoiseGate,  &laf);
+    kComp  .setup(this, p.apvts, NAMPlayerProcessor::idCompThresh, &laf);
+    kOutput.setup(this, p.apvts, NAMPlayerProcessor::idOutputGain, &laf);
+
+    // ── Amp knobs ────────────────────────────────────────────────────────────
+    kGain    .setup(this, p.apvts, NAMPlayerProcessor::idAmpGain,     &laf);
+    kBass    .setup(this, p.apvts, NAMPlayerProcessor::idAmpBass,     &laf);
+    kMid     .setup(this, p.apvts, NAMPlayerProcessor::idAmpMid,      &laf);
+    kTreble  .setup(this, p.apvts, NAMPlayerProcessor::idAmpTreble,   &laf);
+    kPresence.setup(this, p.apvts, NAMPlayerProcessor::idAmpPresence, &laf);
+    kMaster  .setup(this, p.apvts, NAMPlayerProcessor::idAmpMaster,   &laf);
+
+    // ── FX knobs ─────────────────────────────────────────────────────────────
+    kODDrive  .setup(this, p.apvts, NAMPlayerProcessor::idODDrive,       &laf);
+    kODTone   .setup(this, p.apvts, NAMPlayerProcessor::idODTone,        &laf);
+    kODLevel  .setup(this, p.apvts, NAMPlayerProcessor::idODLevel,       &laf);
+    kDTime    .setup(this, p.apvts, NAMPlayerProcessor::idDelayTime,     &laf);
+    kDFeedback.setup(this, p.apvts, NAMPlayerProcessor::idDelayFeedback, &laf);
+    kDMix     .setup(this, p.apvts, NAMPlayerProcessor::idDelayMix,      &laf);
+    kRDecay   .setup(this, p.apvts, NAMPlayerProcessor::idReverbDecay,   &laf);
+    kRSize    .setup(this, p.apvts, NAMPlayerProcessor::idReverbSize,    &laf);
+    kRMix     .setup(this, p.apvts, NAMPlayerProcessor::idReverbMix,     &laf);
+
+    // ── Bypass toggles ────────────────────────────────────────────────────────
+    for (auto* t : { &tbOD, &tbDelay, &tbReverb, &tbCab }) addAndMakeVisible(*t);
+    attOD    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts, NAMPlayerProcessor::idODOn,     tbOD);
+    attDelay = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts, NAMPlayerProcessor::idDelayOn,  tbDelay);
+    attReverb= std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts, NAMPlayerProcessor::idReverbOn, tbReverb);
+    attCab   = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts, NAMPlayerProcessor::idCabBypass,tbCab);
+
+    // ── Load buttons ─────────────────────────────────────────────────────────
+    addAndMakeVisible(btnLoadModel);
+    btnLoadModel.onClick = [this]
+    {
+        chooserModel = std::make_unique<juce::FileChooser>("Load NAM Model",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.nam");
+        chooserModel->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc){ auto r=fc.getResults(); if(!r.isEmpty()){proc.loadNAMModel(r[0]);repaint();} });
+    };
+
+    addAndMakeVisible(btnLoadIR);
+    btnLoadIR.onClick = [this]
+    {
+        chooserIR = std::make_unique<juce::FileChooser>("Load Cabinet IR",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.wav");
+        chooserIR->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc){ auto r=fc.getResults(); if(!r.isEmpty()){proc.loadIR(r[0]);repaint();} });
+    };
+
+    // ── Cab tabs ─────────────────────────────────────────────────────────────
+    tabCabinet .setClickingTogglesState(false);
+    tabIRLoader.setClickingTogglesState(false);
+    tabCabinet .onClick = [this]{ activeCabTab=0; repaint(); };
+    tabIRLoader.onClick = [this]{ activeCabTab=1; repaint(); };
+    addAndMakeVisible(tabCabinet);
+    addAndMakeVisible(tabIRLoader);
+
+    // Transparent — bg image provides appearance
+    for (auto* t : { &tabCabinet, &tabIRLoader })
+    {
+        t->setColour(juce::TextButton::buttonColourId,   juce::Colours::transparentBlack);
+        t->setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        t->setColour(juce::TextButton::textColourOffId,  juce::Colours::transparentBlack);
+        t->setColour(juce::TextButton::textColourOnId,   juce::Colours::transparentBlack);
+    }
+
+    // Make combo transparent — bg image provides the visual
+    comboCab.setColour(juce::ComboBox::backgroundColourId, juce::Colours::transparentBlack);
+    comboCab.setColour(juce::ComboBox::textColourId,       juce::Colours::transparentBlack);
+    comboCab.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+    comboCab.setColour(juce::ComboBox::arrowColourId,      juce::Colours::transparentBlack);
+
+    // Load buttons - fully transparent, bg image provides visual, only click area matters
+    for (auto* b : { &btnLoadModel, &btnLoadIR })
+    {
+        b->setColour(juce::TextButton::buttonColourId,   juce::Colours::transparentBlack);
+        b->setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        b->setColour(juce::TextButton::textColourOffId,  juce::Colours::transparentBlack);
+        b->setColour(juce::TextButton::textColourOnId,   juce::Colours::transparentBlack);
+    }
+    comboCab.addItem("4x12  G12T-75",2);
+    comboCab.addItem("1x12  AlNiCo Blue",3);
+    comboCab.setSelectedId(1);
+    addAndMakeVisible(comboCab);
+    // Distance slider — transparent, bg provides visual
+    sliderDist.setRange(0.0,30.0,0.1); sliderDist.setValue(2.5);
+    sliderDist.setColour(juce::Slider::backgroundColourId,  juce::Colours::transparentBlack);
+    sliderDist.setColour(juce::Slider::trackColourId,       juce::Colours::transparentBlack);
+    sliderDist.setColour(juce::Slider::thumbColourId,       kOrange.withAlpha(.6f));
+    addAndMakeVisible(sliderDist);
+
+    // ── Cab tabs — transparent (bg image provides appearance) ─────────────────
+    for (auto* t : { &tabCabinet, &tabIRLoader })
+    {
+        t->setColour(juce::TextButton::buttonColourId,    juce::Colours::transparentBlack);
+        t->setColour(juce::TextButton::buttonOnColourId,  juce::Colours::transparentBlack);
+        t->setColour(juce::TextButton::textColourOffId,   juce::Colours::transparentBlack);
+        t->setColour(juce::TextButton::textColourOnId,    juce::Colours::transparentBlack);
+    }
+
+    startTimerHz(15);
+}
+
+NAMPlayerEditor::~NAMPlayerEditor() { stopTimer(); setLookAndFeel(nullptr); }
+void NAMPlayerEditor::timerCallback() { vuIn*=0.92f; vuOut*=0.92f; repaint(); }
+
+// ── Coordinate mapping: image pixel → plugin pixel ───────────────────────────
+// Reference image: 1520×1034 (includes JUCE titlebar+warning = ~72px at top)
+// We strip those 72px and scale the rest to kPlugW×kPlugH
+
+juce::Rectangle<int> NAMPlayerEditor::chainNodeRect(int i) const
+{
+    // Measured: 8 nodes at cy=91, cx: 270,328,387,445,503,559,617,674
+    static const int nodeX[8] = { 270, 328, 387, 445, 503, 559, 617, 674 };
+    return { nodeX[i] - 26, 69, 52, 44 };
+}
+
+// ── resized ───────────────────────────────────────────────────────────────────
+void NAMPlayerEditor::resized()
+{
+    // Positions from background image (1556x1011 -> 980x620)
+    // Scale X=0.62982  Scale Y=0.61325
+
+    // ── Strip knobs — fine-tuned vertical position ────────────────────────────
+    kInput .place( 55,  82, 68);
+    kGate  .place(144,  82, 68);
+    kComp  .place(717,  82, 68);
+    kOutput.place(792,  82, 68);
+
+    // ── Amp knobs ─────────────────────────────────────────────────────────────
+    kGain    .place(137, 282, 81); kGain    .valLabel.setVisible(true);
+    kBass    .place(236, 282, 81); kBass    .valLabel.setVisible(true);
+    kMid     .place(335, 282, 81); kMid     .valLabel.setVisible(true);
+    kTreble  .place(435, 282, 81); kTreble  .valLabel.setVisible(true);
+    kPresence.place(534, 282, 81); kPresence.valLabel.setVisible(true);
+    kMaster  .place(631, 282, 81); kMaster  .valLabel.setVisible(true);
+
+    // ── FX knobs ─────────────────────────────────────────────────────────────
+    kODDrive  .place( 42, 379, 59); kODDrive  .valLabel.setVisible(true);
+    kODTone   .place(108, 379, 59); kODTone   .valLabel.setVisible(true);
+    kODLevel  .place( 68, 429, 59); kODLevel  .valLabel.setVisible(true);
+    kDTime    .place(166, 379, 59); kDTime    .valLabel.setVisible(true);
+    kDFeedback.place(233, 379, 59); kDFeedback.valLabel.setVisible(true);
+    kDMix     .place(199, 429, 59); kDMix     .valLabel.setVisible(true);
+    kRDecay   .place(293, 379, 59); kRDecay   .valLabel.setVisible(true);
+    kRSize    .place(360, 379, 59); kRSize    .valLabel.setVisible(true);
+    kRMix     .place(326, 429, 59); kRMix     .valLabel.setVisible(true);
+
+    // ── Stomp toggles ─────────────────────────────────────────────────────────
+    tbOD    .setBounds( 46, 457, 44, 44);
+    tbDelay .setBounds(154, 457, 44, 44);
+    tbReverb.setBounds(304, 457, 44, 44);
+
+    // ── Cabinet section ───────────────────────────────────────────────────────
+    tabCabinet .setBounds(397, 336, 79, 24);
+    tabIRLoader.setBounds(484, 336, 79, 24);
+    comboCab   .setBounds(668, 474, 312, 26);
+    sliderDist .setBounds(668, 510, 290, 16);
+    btnLoadModel.setBounds(667, 588, 148, 28);
+    btnLoadIR   .setBounds(822, 588, 148, 28);
+    tbCab.setBounds(836, 336, 18, 18);
+}
+
+// ── paint ─────────────────────────────────────────────────────────────────────
+void NAMPlayerEditor::paint(juce::Graphics& g)
+{
+    // Draw the background image — this IS the visual design
+    if (bgImage.isValid())
+    {
+        // New image covers the full plugin area with no top strip needed
+        g.drawImage(bgImage, 0, 0, getWidth(), getHeight(),
+                    0, 0, (int)kImgW, (int)kImgH);
+    }
+    else
+    {
+        // Fallback if image didn't load
+        g.fillAll(juce::Colour(0xfff0ede6));
+        g.setColour(juce::Colours::red);
+        g.drawText("Background image failed to load", getLocalBounds(), juce::Justification::centred);
+    }
+
+    // Overlay: VU meter animation
+    overlayVU(g);
+
+    // Overlay: orange dot indicators beside GATE and COMP values
+    overlayDots(g);
+
+    // Overlay: stomp LED states
+    paintStompLED(g, tbOD    .getBounds().toFloat(), tbOD    .getToggleState());
+    paintStompLED(g, tbDelay .getBounds().toFloat(), tbDelay .getToggleState());
+    paintStompLED(g, tbReverb.getBounds().toFloat(), tbReverb.getToggleState());
+
+    // Overlay: loaded model/IR names in cabinet section
+    overlayLoadedNames(g);
+
+    // Overlay: active chain node highlight
+    for (int i = 0; i < 8; ++i)
+    {
+        auto nb = chainNodeRect(i);
+        if (i == activeNode)
+        {
+            // Orange tint over the active node (AMP by default)
+            g.setColour(juce::Colour(0xffE8820C).withAlpha(.18f));
+            g.fillRoundedRectangle(nb.toFloat(), 7.f);
+            g.setColour(juce::Colour(0xffE8820C));
+            g.drawRoundedRectangle(nb.toFloat(), 7.f, 2.f);
+        }
+    }
+}
+
+void NAMPlayerEditor::overlayVU(juce::Graphics& g)
+{
+    // Left VU — image area approx x=30..52, y=152..272 (after strip)
+    auto drawVU = [&](float bx, float by, float bw, float bh, float lvl)
+    {
+        int nSegs = 14;
+        float segH = bh / nSegs;
+        int lit = (int)(nSegs * juce::jlimit(0.f, 1.f, lvl));
+        for (int s = 0; s < lit; ++s)
+        {
+            float sy2 = by + bh - (s+1)*segH + 1.f;
+            if      (s >= 12) g.setColour(juce::Colour(0xffcc2200));
+            else if (s >= 10) g.setColour(juce::Colour(0xffE8820C));
+            else               g.setColour(juce::Colour(0xff5aaa60));
+            g.fillRoundedRectangle(bx+1, sy2, bw-2, segH-1.5f, 1.f);
+        }
+    };
+    drawVU(11.f,  54.f, 16.f, 93.f, vuIn);
+    drawVU(838.f, 54.f, 16.f, 93.f, vuOut);
+}
+
+void NAMPlayerEditor::overlayDots(juce::Graphics& g)
+{
+    g.setColour(juce::Colour(0xffE8820C));
+    g.fillEllipse(176.f, 120.f, 8.f, 8.f);  // GATE dot
+    g.fillEllipse(753.f, 120.f, 8.f, 8.f);  // COMP dot
+}
+
+void NAMPlayerEditor::paintStompLED(juce::Graphics& g, juce::Rectangle<float> b, bool on)
+{
+    // Draw a small LED dot below the stomp area
+    float lr = 5.f;
+    float lx = b.getCentreX() - lr;
+    float ly = b.getBottom() + 3.f;
+    if (on)
+    {
+        g.setColour(juce::Colour(0xffE8820C).withAlpha(.3f));
+        g.fillEllipse(lx-3, ly-3, lr*2+6, lr*2+6);
+        g.setColour(juce::Colour(0xffE8820C));
+    }
+    else
+    {
+        g.setColour(juce::Colour(0xffaaaaaa));
+    }
+    g.fillEllipse(lx, ly, lr*2, lr*2);
+}
+
+void NAMPlayerEditor::overlayLoadedNames(juce::Graphics& g)
+{
+    // Mask out the background image's static "No model loaded" text
+    // by painting a small cream rect over it, then drawing our live text
+    auto maskCol = juce::Colour(0xfff0ede8); // matches bg cream colour
+
+    g.setColour(juce::Colour(0xfff2f0eb));
+    g.fillRect(668, 536, 312, 18);
+    g.setFont(juce::Font(10.f));
+    g.setColour(proc.isNAMLoaded() ? juce::Colour(0xff222222) : juce::Colour(0xff999999));
+    g.drawText(proc.isNAMLoaded() ? proc.getLoadedNAMName() : "No model loaded",
+               670, 537, 308, 16, juce::Justification::centredLeft, true);
+
+    g.setColour(juce::Colour(0xfff2f0eb));
+    g.fillRect(668, 558, 312, 18);
+    g.setFont(juce::Font(10.f));
+    g.setColour(proc.isIRLoaded() ? juce::Colour(0xff222222) : juce::Colour(0xff999999));
+    g.drawText(proc.isIRLoaded() ? proc.getLoadedIRName() : "No IR loaded",
+               670, 559, 308, 16, juce::Justification::centredLeft, true);
+}
+
+void NAMPlayerEditor::mouseDown(const juce::MouseEvent& e)
+{
+    for (int i = 0; i < 8; ++i)
+        if (chainNodeRect(i).contains(e.getPosition()))
+            { activeNode = i; repaint(); return; }
+    AudioProcessorEditor::mouseDown(e);
+}
