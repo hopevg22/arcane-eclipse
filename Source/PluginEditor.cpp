@@ -306,15 +306,15 @@ void ArcaneEclipseEditor::resized()
     int cabY   = fxY + kFXH;
     int footY  = H - kFootH;
 
-    // ── Strip knobs ───────────────────────────────────────────────────────────
+    // ── Strip knobs — moved inward away from VU meters ───────────────────────
     int kSz = 58;
-    kInput .place(52,  stripY+60, kSz);
-    kGate  .place(124, stripY+60, kSz);
-    kComp  .place(W-124, stripY+60, kSz);
-    kOutput.place(W-52,  stripY+60, kSz);
+    kInput .place(80,  stripY+60, kSz);
+    kGate  .place(154, stripY+60, kSz);
+    kComp  .place(W-154, stripY+60, kSz);
+    kOutput.place(W-80,  stripY+60, kSz);
 
     // ── Amp knobs ─────────────────────────────────────────────────────────────
-    int aSz=72, aCy=ampY+kAmpH/2+10;
+    int aSz=72, aCy=ampY+kAmpH*3/4;  // pushed down into faceplate area
     int ampSpan = W-200;
     int aSpacing = ampSpan/6;
     for(int i=0;i<6;++i){
@@ -363,16 +363,16 @@ void ArcaneEclipseEditor::resized()
 
     // ── Cabinet section ───────────────────────────────────────────────────────
     int cX = W-cabW-4;
-    tabCab.setBounds(cX,    fxY+2, 90, 26);
-    tabIR .setBounds(cX+92, fxY+2, 90, 26);
-
+    // No tabs — single "AMP & IR LOADER" panel
     int cabH = footY - fxY;
-    comboCab   .setBounds(cX+4,    fxY+38, cabW-12, 26);
-    sliderDist .setBounds(cX+4,    fxY+80, cabW-12, 18);
+    sliderDist  .setBounds(cX+4,    fxY+76, cabW-12, 18);
     btnLoadModel.setBounds(cX+4,   fxY+cabH-62, (cabW-16)/2, 32);
     btnLoadIR   .setBounds(cX+4+(cabW-16)/2+8, fxY+cabH-62, (cabW-16)/2, 32);
-
     tbCab.setBounds(W-20, fxY+2, 16, 16);
+    // Hide unused controls
+    tabCab.setBounds(-200,-200,1,1);
+    tabIR .setBounds(-200,-200,1,1);
+    comboCab.setBounds(-200,-200,1,1);
 }
 
 // ── paint ─────────────────────────────────────────────────────────────────────
@@ -451,16 +451,17 @@ void ArcaneEclipseEditor::paintStrip(juce::Graphics& g)
     paintVU(g, {14.f,(float)(Y+16),16.f,88.f}, vuIn);
     paintVU(g, {(float)(W-30),(float)(Y+16),16.f,88.f}, vuOut);
 
-    // Labels above strip knobs
+    // Labels above strip knobs — moved inward to match knob positions
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("INPUT",   32,Y+4,80,12,juce::Justification::centred);
-    g.drawText("GATE",   104,Y+4,80,12,juce::Justification::centred);
-    // Power dots
+    g.drawText("INPUT",   52,Y+4,58,12,juce::Justification::centred);
+    g.drawText("GATE",   126,Y+4,58,12,juce::Justification::centred);
+    // Power dot beside GATE
     g.setColour(kPurple);
-    g.fillEllipse(154.f,(float)(Y+8),6.f,6.f);
-    g.drawText("COMPRESSOR", W-174,Y+4,100,12,juce::Justification::centred);
-    g.fillEllipse((float)(W-100),(float)(Y+8),6.f,6.f);
-    g.drawText("OUTPUT",     W-82,Y+4,80,12,juce::Justification::centred);
+    g.fillEllipse(182.f,(float)(Y+8),6.f,6.f);
+    g.drawText("COMPRESSOR", W-196,Y+4,84,12,juce::Justification::centred);
+    // Power dot beside COMP
+    g.fillEllipse((float)(W-114),(float)(Y+8),6.f,6.f);
+    g.drawText("OUTPUT", W-109,Y+4,58,12,juce::Justification::centred);
 }
 
 void ArcaneEclipseEditor::paintVU(juce::Graphics& g, juce::Rectangle<float> b, float lvl)
@@ -584,8 +585,8 @@ void ArcaneEclipseEditor::paintAmpHead(juce::Graphics& g)
     }
     g.setFont(juce::Font("Georgia",28.f,juce::Font::bold)); g.setColour(kText);
     g.drawText("ARCANE", juce::Rectangle<int>(npX,npY+6,npW,28), juce::Justification::centred);
-    g.setFont(juce::Font(9.f,juce::Font::bold)); g.setColour(kPurple);
-    g.drawText("\u2014  ECLIPSE  \u2014", juce::Rectangle<int>(npX,npY+36,npW,16), juce::Justification::centred);
+    g.setFont(juce::Font(10.f,juce::Font::bold)); g.setColour(kPurple);
+    g.drawText("ECLIPSE", juce::Rectangle<int>(npX,npY+36,npW,16), juce::Justification::centred);
 
     // Faceplate
     int fY=Y+gH, fH=H2-gH;
@@ -654,15 +655,11 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
     g.setColour(kCard); g.fillRoundedRectangle((float)cX,(float)(fxY+4),316.f,(float)(cabH-8),8.f);
     g.setColour(kCardBd); g.drawRoundedRectangle((float)cX,(float)(fxY+4),316.f,(float)(cabH-8),8.f,1.f);
 
-    // Tabs underline
+    // Single header — AMP & IR LOADER
     g.setColour(kCardBd); g.drawHorizontalLine(fxY+30,(float)cX,(float)(cX+316));
+    g.setFont(juce::Font(11.f,juce::Font::bold));
     g.setColour(kPurple);
-    g.fillRect(activeCabTab==0?(float)(cX+2):(float)(cX+94),(float)(fxY+28),88.f,2.f);
-    g.setFont(juce::Font(10.f,juce::Font::bold));
-    g.setColour(activeCabTab==0?kPurple:kMuted);
-    g.drawText("CABINET", cX+2, fxY+6, 90, 20, juce::Justification::centred);
-    g.setColour(activeCabTab==1?kPurple:kMuted);
-    g.drawText("IR LOADER", cX+94, fxY+6, 90, 20, juce::Justification::centred);
+    g.drawText("AMP & IR LOADER", cX+2, fxY+6, 312, 20, juce::Justification::centred);
 
     // Cabinet photo
     int phX=cX+6, phY=fxY+36, phW=120, phH=cabH-100;

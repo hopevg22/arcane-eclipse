@@ -109,10 +109,24 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     juce::ScopedNoDenormals noDenormals;
     int numSamples = buffer.getNumSamples(), numCh = buffer.getNumChannels();
 
-    float inGain = juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idInputGain)->load());
-    float ampGain = juce::jmap(apvts.getRawParameterValue(idAmpGain)->load(),0.f,10.f,-6.f,18.f);
-    buffer.applyGain(inGain * juce::Decibels::decibelsToGain(ampGain));
+    // 1. INPUT GAIN
+    buffer.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idInputGain)->load()));
 
+    // 2. NOISE GATE — first in chain, smooth gain reduction
+    {
+        float thresh = juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idNoiseGate)->load());
+        for (int n = 0; n < numSamples; ++n) {
+            float rms = std::fabs(buffer.getReadPointer(0)[n]);
+            float coeff = rms > gateEnvelope ? 0.9995f : 0.9980f;
+            gateEnvelope = rms + coeff * (gateEnvelope - rms);
+            float gateGain = gateEnvelope > thresh ? 1.f :
+                             juce::jlimit(0.f, 1.f, gateEnvelope / juce::jmax(thresh, 1e-6f));
+            for (int ch = 0; ch < numCh; ++ch)
+                buffer.getWritePointer(ch)[n] *= gateGain;
+        }
+    }
+
+    // 3. COMPRESSOR — optional pre-amp compression
     if (apvts.getRawParameterValue(idCompOn)->load() > .5f) {
         compressor.setParameters(
             apvts.getRawParameterValue(idCompThresh)->load(),
@@ -123,6 +137,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         compressor.processBlock(buffer);
     }
 
+    // 4. OVERDRIVE — pre-amp drive pedal
     if (apvts.getRawParameterValue(idODOn)->load() > .5f) {
         overdrive.setParameters(
             apvts.getRawParameterValue(idODDrive)->load(),
@@ -131,41 +146,35 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         overdrive.processBlock(buffer);
     }
 
-    // Noise gate
-    float thresh = juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idNoiseGate)->load());
-    auto* left = buffer.getWritePointer(0);
-    for (int n = 0; n < numSamples; ++n) {
-        float rms = std::fabs(left[n]);
-        float coeff = rms > gateEnvelope ? .9999f : .999f;
-        gateEnvelope = rms + coeff*(gateEnvelope-rms);
-        float gate = gateEnvelope > thresh ? 1.f : 0.f;
-        for (int ch = 0; ch < numCh; ++ch) buffer.getWritePointer(ch)[n] *= gate;
-    }
+    // 5. AMP GAIN — pre-NAM input level
+    float ampGainDb = juce::jmap(apvts.getRawParameterValue(idAmpGain)->load(), 0.f,10.f,-6.f,18.f);
+    buffer.applyGain(juce::Decibels::decibelsToGain(ampGainDb));
 
-    // NAM inference
+    // 6. NAM MODEL — the amp simulation
     if (namModel != nullptr) {
         const double namSR = 48000.0;
         double ratio = namSR / currentSampleRate;
         int namSamples = (int)std::ceil(numSamples * ratio) + 4;
-        if ((int)resampleBufIn.size() < namSamples+4)  resampleBufIn.resize((size_t)namSamples+16);
+        if ((int)resampleBufIn.size()  < namSamples+4) resampleBufIn .resize((size_t)namSamples+16);
         if ((int)resampleBufOut.size() < namSamples+4) resampleBufOut.resize((size_t)namSamples+16);
         std::vector<float> mono((size_t)numSamples);
+        auto* L = buffer.getReadPointer(0);
         for (int n = 0; n < numSamples; ++n) {
-            float s = left[n];
-            if (numCh > 1) s = .5f*(s+buffer.getReadPointer(1)[n]);
-            mono[(size_t)n] = s;
+            mono[(size_t)n] = numCh > 1 ? .5f*(L[n]+buffer.getReadPointer(1)[n]) : L[n];
         }
         int actualNam = resamplerIn.process(ratio, mono.data(), resampleBufIn.data(), namSamples, numSamples, 0);
         namModel->Process(resampleBufIn.data(), resampleBufOut.data(), (size_t)actualNam);
         std::vector<float> namOut((size_t)numSamples+8);
-        int actualOut = juce::jmin(resamplerOut.process(currentSampleRate/namSR, resampleBufOut.data(), namOut.data(), numSamples, actualNam, 0), numSamples);
+        int actualOut = juce::jmin(resamplerOut.process(currentSampleRate/namSR,
+                        resampleBufOut.data(), namOut.data(), numSamples, actualNam, 0), numSamples);
         for (int ch = 0; ch < numCh; ++ch) {
             auto* dst = buffer.getWritePointer(ch);
-            for (int n = 0; n < actualOut; ++n) dst[n] = namOut[(size_t)n];
+            for (int n = 0; n < actualOut;    ++n) dst[n] = namOut[(size_t)n];
             for (int n = actualOut; n < numSamples; ++n) dst[n] = 0.f;
         }
     }
 
+    // 7. AMP EQ — tone shaping post-NAM
     updateEQ();
     for (int n = 0; n < numSamples; ++n)
         for (int ch = 0; ch < juce::jmin(numCh,2); ++ch) {
@@ -176,15 +185,17 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             d[n] = presenceFilter[ch].processSample(d[n]);
         }
 
-    float masterDb = juce::jmap(apvts.getRawParameterValue(idAmpMaster)->load(),0.f,10.f,-20.f,6.f);
+    // 8. MASTER VOLUME
+    float masterDb = juce::jmap(apvts.getRawParameterValue(idAmpMaster)->load(), 0.f,10.f,-20.f,6.f);
     buffer.applyGain(juce::Decibels::decibelsToGain(masterDb));
 
-    bool cabBypassed = apvts.getRawParameterValue(idCabBypass)->load() > .5f;
-    if (!cabBypassed && irLoaded) {
+    // 9. CABINET IR — speaker simulation
+    if (irLoaded) {
         juce::dsp::AudioBlock<float> block(buffer);
         convolution.process(juce::dsp::ProcessContextReplacing<float>(block));
     }
 
+    // 10. MODULATION — post-cab chorus/flanger (keep mix low)
     if (apvts.getRawParameterValue(idModOn)->load() > .5f) {
         modulation.setParameters(
             apvts.getRawParameterValue(idModRate)->load(),
@@ -194,6 +205,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         modulation.processBlock(buffer);
     }
 
+    // 11. DELAY
     if (apvts.getRawParameterValue(idDelayOn)->load() > .5f) {
         delay.setParameters(
             apvts.getRawParameterValue(idDelayTime)->load(),
@@ -203,6 +215,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         delay.processBlock(buffer);
     }
 
+    // 12. REVERB — always last
     if (apvts.getRawParameterValue(idReverbOn)->load() > .5f) {
         reverb.setParameters(
             apvts.getRawParameterValue(idReverbDecay)->load(),
@@ -213,6 +226,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         reverb.processBlock(buffer);
     }
 
+    // 13. OUTPUT GAIN
     buffer.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idOutputGain)->load()));
 }
 
