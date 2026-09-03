@@ -1,41 +1,57 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <BinaryData.h>
 #include "PluginProcessor.h"
 
-// ── Palette ──────────────────────────────────────────────────────────────────
-namespace AE {
-    static const juce::Colour Purple { 0xff9B7FD4 };
-    static const juce::Colour PurpleDim { 0xff7B5EA7 };
-    static const juce::Colour Dark   { 0xff0e0e14 };
-    static const juce::Colour Card   { 0xff16161e };
-    static const juce::Colour CardBd { 0xff2a2a3a };
-    static const juce::Colour Text   { 0xffddddee };
-    static const juce::Colour Muted  { 0xff888899 };
+// ── Colours ───────────────────────────────────────────────────────────────────
+namespace AEC {
+    static const juce::Colour Bg      { 0xff0d0d12 };
+    static const juce::Colour Surface { 0xff13131a };
+    static const juce::Colour Card    { 0xff1a1a24 };
+    static const juce::Colour CardBd  { 0xff2a2a3e };
+    static const juce::Colour Purple  { 0xff8B5CF6 };
+    static const juce::Colour PurDim  { 0xff6D45D4 };
+    static const juce::Colour PurGlow { 0x338B5CF6 };
+    static const juce::Colour Text    { 0xfff0f0ff };
+    static const juce::Colour Muted   { 0xff7878aa };
+    static const juce::Colour Strip   { 0xff0f0f18 };
 }
 
-// ── Transparent knob LAF — purple pointer only ────────────────────────────────
-class ArcaneKnobLAF : public juce::LookAndFeel_V4
+// ── LookAndFeel ───────────────────────────────────────────────────────────────
+class ArcLAF : public juce::LookAndFeel_V4
 {
 public:
-    ArcaneKnobLAF();
+    ArcLAF();
     void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h,
                           float pos, float startA, float endA, juce::Slider&) override;
     void drawLabel(juce::Graphics&, juce::Label&) override;
     void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool, bool) override;
     void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
     void drawComboBox(juce::Graphics&, int w, int h, bool, int, int, int, int, juce::ComboBox&) override;
-    void drawPopupMenuItem(juce::Graphics&, const juce::Rectangle<int>&, bool, bool, bool, bool, bool,
-                           const juce::String&, const juce::String&, const juce::Drawable*, const juce::Colour*) override;
+    void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
+    void drawPopupMenuItem(juce::Graphics&, const juce::Rectangle<int>&,
+                           bool, bool, bool, bool, bool,
+                           const juce::String&, const juce::String&,
+                           const juce::Drawable*, const juce::Colour*) override;
+    juce::Font getComboBoxFont(juce::ComboBox&) override { return juce::Font(11.f); }
 };
 
 // ── Knob widget ───────────────────────────────────────────────────────────────
 struct AKnob {
     juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
-    juce::Label  valLabel;
+    juce::Label  nameLabel, valLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
-    void setup(juce::Component*, juce::AudioProcessorValueTreeState&, const juce::String& paramId, ArcaneKnobLAF*);
-    void place(int cx, int cy, int sz);
+
+    void setup(juce::Component*, juce::AudioProcessorValueTreeState&,
+               const juce::String& paramId, const juce::String& name, ArcLAF*);
+    void place(int cx, int cy, int sz); // sz = diameter
+};
+
+// ── Stomp button ──────────────────────────────────────────────────────────────
+class StompButton : public juce::ToggleButton
+{
+public:
+    StompButton() : juce::ToggleButton("") {}
+    void paint(juce::Graphics& g) override;
 };
 
 // ── Main editor ───────────────────────────────────────────────────────────────
@@ -50,62 +66,66 @@ public:
 
 private:
     void timerCallback() override;
+
+    // ── paint sections ────────────────────────────────────────────────────────
+    void paintTopBar(juce::Graphics&);
+    void paintStrip(juce::Graphics&);
     void paintChain(juce::Graphics&);
+    void paintAmpHead(juce::Graphics&);
+    void paintFXSection(juce::Graphics&);
+    void paintCabSection(juce::Graphics&);
+    void paintFooter(juce::Graphics&);
+    void paintVU(juce::Graphics&, juce::Rectangle<float>, float lvl);
     void paintChainNode(juce::Graphics&, int idx, juce::Rectangle<int>, bool active);
-    void paintVU(juce::Graphics&, float bx, float by, float bw, float bh, float lvl);
-    void paintFXOverlays(juce::Graphics&);
-    void paintStomp(juce::Graphics&, float cx, float cy, bool on);
-    void paintCabOverlay(juce::Graphics&);
-    juce::Rectangle<int> chainNodeRect(int i) const;
+
+    juce::Rectangle<int> chainNodeBounds(int i) const;
+
+    // ── layout constants ──────────────────────────────────────────────────────
+    static constexpr int W = 1100, H = 680;
+    static constexpr int kTopH   = 50;
+    static constexpr int kStripH = 120;
+    static constexpr int kAmpH   = 210;
+    static constexpr int kFXH    = 230;
+    static constexpr int kFootH  = 36;
+    // kCabH fills remaining space
 
     ArcaneEclipseProcessor& proc;
-    ArcaneKnobLAF laf;
-    juce::Image bgImage;
+    ArcLAF laf;
     int activeNode = 3;
     float vuIn = 0.f, vuOut = 0.f;
 
-    // Image is 1577x997, plugin 980x620 — pre-scale all coords
-    static constexpr float kImgW = 1577.f, kImgH = 997.f;
-    static constexpr int kPlugW = 980, kPlugH = 620;
-    static int sx(float x) { return (int)(x * kPlugW / kImgW); }
-    static int sy(float y) { return (int)(y * kPlugH / kImgH); }
-    static int sw(float w) { return (int)(w * kPlugW / kImgW); }
-
     // Strip knobs
     AKnob kInput, kGate, kComp, kOutput;
+
     // Amp knobs
     AKnob kGain, kBass, kMid, kTreble, kPresence, kMaster;
-    // Overdrive
+
+    // OD knobs
     AKnob kODDrive, kODTone, kODLevel;
-    // Modulation
+    // Mod knobs
     AKnob kModRate, kModDepth, kModMix;
-    // Delay
+    // Delay knobs
     AKnob kDTime, kDFeedback, kDMix;
-    // Reverb
+    // Reverb knobs
     AKnob kRDecay, kRSize, kRMix;
 
-    // Toggles
-    juce::ToggleButton tbOD{""}, tbMod{""}, tbDelay{""}, tbReverb{""}, tbCab{""};
+    // Stomps
+    StompButton stompOD, stompMod, stompDelay, stompReverb;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         attOD, attMod, attDelay, attReverb, attCab;
+    juce::ToggleButton tbCab{""};
 
     // Dropdowns
     juce::ComboBox comboModType, comboDelayType, comboReverbType, comboCab;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
         attModType, attDelayType, attReverbType;
 
-    // NAM loader on OD card
-    juce::TextButton btnBrowseNAM { "BROWSE" };
-    juce::Label      labelNAMLoaded;
-
-    // Load buttons
-    juce::TextButton btnLoadModel { "LOAD MODEL" }, btnLoadIR { "LOAD IR" };
-
-    // Distance slider
+    // Buttons
+    juce::TextButton btnLoadModel{"LOAD MODEL"}, btnLoadIR{"LOAD IR"}, btnBrowse{"BROWSE"};
     juce::Slider sliderDist { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
 
     // Cab tabs
-    juce::TextButton tabCabinet { "CABINET" }, tabIRLoader { "IR LOADER" };
+    juce::TextButton tabCab{"CABINET"}, tabIR{"IR LOADER"};
     int activeCabTab = 0;
 
     std::unique_ptr<juce::FileChooser> chooserModel, chooserIR;
