@@ -315,111 +315,82 @@ void ArcaneEclipseEditor::timerCallback() { vuIn*=.92f; vuOut*=.92f; repaint(); 
 // ── Layout ────────────────────────────────────────────────────────────────────
 juce::Rectangle<int> ArcaneEclipseEditor::chainNodeBounds(int i) const
 {
-    // 9 nodes: GATE COMP DRIVE AMP CAB EQ MOD DELAY REVERB
-    int nodeW = 52, nodeH = 46;
-    int totalW = 9*nodeW + 8*6;
-    int startX = (W - totalW) / 2;
-    int x = startX + i*(nodeW+6);
-    int y = kTopH + (kStripH - nodeH)/2;
-    return {x, y, nodeW, nodeH};
+    // New background positions
+    static const int node_cxs[9] = {258,322,386,450,514,578,642,706,770};
+    int nodeW=62, nodeH=52, nodeY=116;
+    return {node_cxs[i]-nodeW/2, nodeY-nodeH/2, nodeW, nodeH};
 }
 
 void ArcaneEclipseEditor::resized()
 {
-    int stripY = kTopH;
-    int ampY   = kTopH + kStripH;
-    int fxY    = ampY + kAmpH;
-    int cabY   = fxY + kFXH;
-    int footY  = H - kFootH;
+    // All positions measured directly from new background (1100x680 perfect 1:1)
 
-    // ── Toggle buttons sit over their respective chain nodes ─────────────────
-    // Each chain node IS the toggle — clicking the node turns the effect on/off
-    // Node positions calculated same as chainNodeBounds()
+    // ── Strip knobs ───────────────────────────────────────────────────────────
+    int kSz = 56;
+    kInput .place( 80,  88, kSz);
+    kGate  .place(154,  88, kSz);
+    kComp  .place(947,  88, kSz);
+    kOutput.place(1020, 88, kSz);
+
+    // ── Chain node toggles over background node boxes ─────────────────────────
     {
-        int nodeW=52, nodeH=46;
-        int totalW=9*nodeW+8*6;
-        int startX=(W-totalW)/2;
-        int nodeY=kTopH+(kStripH-nodeH)/2;
-        auto nb=[&](int i){ return juce::Rectangle<int>(startX+i*(nodeW+6),nodeY,nodeW,nodeH); };
-        tbGate .setBounds(nb(0)); // GATE node
-        tbComp .setBounds(nb(1)); // COMP node
-        stompOD    .setBounds(nb(2)); // DRIVE node
-        stompMod   .setBounds(nb(6)); // MOD node
-        stompDelay .setBounds(nb(7)); // DELAY node
-        stompReverb.setBounds(nb(8)); // REVERB node
+        // Chain nodes visible in strip at y~105-135
+        // 9 nodes estimated from background spacing
+        int nw=62, nh=52, cy=116;
+        int cxs[]={258,322,386,450,514,578,642,706,770};
+        tbGate .setBounds(cxs[0]-nw/2,cy-nh/2,nw,nh);
+        tbComp .setBounds(cxs[1]-nw/2,cy-nh/2,nw,nh);
+        stompOD    .setBounds(cxs[2]-nw/2,cy-nh/2,nw,nh);
+        stompMod   .setBounds(cxs[6]-nw/2,cy-nh/2,nw,nh);
+        stompDelay .setBounds(cxs[7]-nw/2,cy-nh/2,nw,nh);
+        stompReverb.setBounds(cxs[8]-nw/2,cy-nh/2,nw,nh);
     }
-
-    // ── Strip knobs — moved inward away from VU meters ───────────────────────
-    int kSz = 58;
-    kInput .place(80,  stripY+60, kSz);
-    kGate  .place(154, stripY+60, kSz);
-    kComp  .place(W-154, stripY+60, kSz);
-    kOutput.place(W-80,  stripY+60, kSz);
 
     // ── Amp knobs ─────────────────────────────────────────────────────────────
-    int aSz=72, aCy=ampY+kAmpH*3/4;  // pushed down into faceplate area
-    int ampSpan = W-200;
-    int aSpacing = ampSpan/6;
-    for(int i=0;i<6;++i){
-        AKnob* ks[]={&kGain,&kBass,&kMid,&kTreble,&kPresence,&kMaster};
-        ks[i]->place(100+aSpacing/2+i*aSpacing, aCy, aSz);
-    }
+    int aSz=90;
+    kGain    .place(249, 315, aSz); kGain    .valLabel.setVisible(true);
+    kBass    .place(399, 315, aSz); kBass    .valLabel.setVisible(true);
+    kMid     .place(549, 315, aSz); kMid     .valLabel.setVisible(true);
+    kTreble  .place(699, 315, aSz); kTreble  .valLabel.setVisible(true);
+    kPresence.place(849, 315, aSz); kPresence.valLabel.setVisible(true);
+    kMaster  .place(998, 315, aSz); kMaster  .valLabel.setVisible(true);
 
-    // ── FX section ────────────────────────────────────────────────────────────
-    // 4 cards equally spaced, cabinet takes remaining width on right
-    int nCards=4, cabW=320;
-    int fxAreaW = W-cabW-16;
-    int cardW = fxAreaW/nCards - 6;
-    int fxKSz=48, fxTopRow=fxY+75, fxBotRow=fxY+140;
-
-    // OD card knobs — use full card height since no stomp
-    int odX = 8;
-    int fxMidRow = fxY + 75;
-    int fxBotRow2 = fxY + 140;
-    kODDrive.place(odX+cardW/4,     fxMidRow,  fxKSz);
-    kODTone .place(odX+cardW*3/4,   fxMidRow,  fxKSz);
-    kODLevel.place(odX+cardW/2,     fxBotRow2, fxKSz);
-    // No stomp buttons in FX cards — stomps now live on chain nodes
-    btnBrowse.setBounds(-200,-200,1,1); // hidden
-
-    // Mod card
-    int modX = odX+cardW+6;
-    kModRate .place(modX+cardW/4,   fxTopRow, fxKSz);
-    kModDepth.place(modX+cardW*3/4, fxTopRow, fxKSz);
-    kModMix  .place(modX+cardW/2,   fxBotRow, fxKSz);
-    comboModType.setBounds(modX+6, fxY+kFXH-28, cardW-12, 22);
-
-    // Delay card
-    int dlX = modX+cardW+6;
-    kDTime    .place(dlX+cardW/4,   fxTopRow, fxKSz);
-    kDFeedback.place(dlX+cardW*3/4, fxTopRow, fxKSz);
-    kDMix     .place(dlX+cardW/2,   fxBotRow, fxKSz);
-    comboDelayType.setBounds(dlX+6, fxY+kFXH-28, cardW-12, 22);
-
-    // Reverb card
-    int rvX = dlX+cardW+6;
-    kRDecay.place(rvX+cardW/4,   fxTopRow, fxKSz);
-    kRSize .place(rvX+cardW*3/4, fxTopRow, fxKSz);
-    kRMix  .place(rvX+cardW/2,   fxBotRow, fxKSz);
-    comboReverbType.setBounds(rvX+6, fxY+kFXH-28, cardW-12, 22);
+    // ── FX knobs ─────────────────────────────────────────────────────────────
+    int fSz=58;
+    // OD card
+    kODDrive  .place( 41, 390, fSz); kODDrive  .valLabel.setVisible(true);
+    kODTone   .place(160, 390, fSz); kODTone   .valLabel.setVisible(true);
+    kODLevel  .place( 99, 478, fSz); kODLevel  .valLabel.setVisible(true);
+    // MOD card
+    kModRate  .place(228, 390, fSz); kModRate  .valLabel.setVisible(true);
+    kModDepth .place(352, 390, fSz); kModDepth .valLabel.setVisible(true);
+    kModMix   .place(289, 478, fSz); kModMix   .valLabel.setVisible(true);
+    // DELAY card
+    kDTime    .place(427, 390, fSz); kDTime    .valLabel.setVisible(true);
+    kDFeedback.place(532, 390, fSz); kDFeedback.valLabel.setVisible(true);
+    kDMix     .place(479, 478, fSz); kDMix     .valLabel.setVisible(true);
+    // REVERB card
+    kRDecay   .place(617, 390, fSz); kRDecay   .valLabel.setVisible(true);
+    kRSize    .place(725, 390, fSz); kRSize    .valLabel.setVisible(true);
+    kRMix     .place(671, 478, fSz); kRMix     .valLabel.setVisible(true);
 
     // ── Cabinet section ───────────────────────────────────────────────────────
-    int cX = W-cabW-4;
-    // No tabs — single "AMP & IR LOADER" panel
-    int cabH = footY - fxY;
-    // No distance slider
+    btnLoadModel.setBounds(912, 613, 148, 36);
+    btnLoadIR   .setBounds(1062,613, 122, 36);
+    btnClearModel.setBounds(1078, 490, 18, 18);
+    btnClearIR   .setBounds(1078, 526, 18, 18);
+
+    // ── Dropdowns ─────────────────────────────────────────────────────────────
+    comboModType  .setBounds( 12, 570, 188, 24);
+    comboDelayType.setBounds(202, 570, 188, 24);
+    comboReverbType.setBounds(392,570, 188, 24);
+
+    // ── Hidden ───────────────────────────────────────────────────────────────
     sliderDist.setBounds(-200,-200,1,1);
-    btnLoadModel.setBounds(cX+4,   fxY+cabH-62, (cabW-16)/2, 32);
-    btnLoadIR   .setBounds(cX+4+(cabW-16)/2+8, fxY+cabH-62, (cabW-16)/2, 32);
-    tbCab.setBounds(W-20, fxY+2, 16, 16);
-    // Hide unused controls
     tabCab.setBounds(-200,-200,1,1);
     tabIR .setBounds(-200,-200,1,1);
     comboCab.setBounds(-200,-200,1,1);
-    // X clear buttons — positioned beside MODEL and IR labels
-    btnClearModel.setBounds(cX+cabW-28, fxY+50, 18, 18);
-    btnClearIR   .setBounds(cX+cabW-28, fxY+88, 18, 18);
-    // BROWSE NAM hidden
+    tbCab.setBounds(-200,-200,1,1);
     btnBrowse.setBounds(-200,-200,1,1);
 }
 
@@ -432,26 +403,23 @@ void ArcaneEclipseEditor::paint(juce::Graphics& g)
     else
         g.fillAll(kBg);
 
-    // Overlay: knob images at all positions
+    // Knob images sit on background knob positions
     paintKnobImages(g);
 
-    // Overlay: chain nodes with icons + highlighting
+    // Chain node highlights (active state glow + icons)
     paintChain(g);
 
-    // Overlay: strip labels and VU meters
-    paintStrip(g);
-
-    // Overlay: FX card titles + brightness feedback
-    paintFXSection(g);
-
-    // Overlay: cabinet section text (MODEL/IR names, X buttons)
+    // Cabinet text overlays only (MODEL/IR names, X buttons)
     paintCabSection(g);
 
-    // Overlay: footer elements
-    paintFooter(g);
+    // FX title brightness feedback
+    paintFXSection(g);
 
-    // Overlay: top bar elements (preset name, icons)
+    // Preset name in top bar (live text only)
     paintTopBar(g);
+
+    // Footer ON badge + RIG button (live elements only)
+    paintFooter(g);
 }
 
 void ArcaneEclipseEditor::paintKnobImages(juce::Graphics& g)
@@ -464,98 +432,40 @@ void ArcaneEclipseEditor::paintKnobImages(juce::Graphics& g)
                     0, 0, img.getWidth(), img.getHeight());
     };
 
-    // Strip knobs (TYPE 1 — 70x70)
+    // Strip knobs
     for (auto [cx,cy] : std::initializer_list<std::pair<int,int>>{
-        {72,106},{160,106},{940,106},{1028,106}})
+        {80,88},{154,88},{947,88},{1020,88}})
         drawKnob(knobStrip, cx, cy);
 
-    // Amp faceplate knobs (TYPE 2 — 86x86)
-    for (auto cx : {158,314,470,626,782,938})
-        drawKnob(knobAmp, cx, 325);
+    // Amp knobs at cy=315
+    for (int cx : {249,399,549,699,849,998})
+        drawKnob(knobAmp, cx, 315);
 
-    // FX knobs (TYPE 3 — 62x62)
-    // OD card
-    drawKnob(knobFX,  49, 437); drawKnob(knobFX, 149, 437); drawKnob(knobFX,  99, 510);
-    // MOD card
-    drawKnob(knobFX, 254, 437); drawKnob(knobFX, 354, 437); drawKnob(knobFX, 304, 510);
-    // DELAY card
-    drawKnob(knobFX, 459, 437); drawKnob(knobFX, 559, 437); drawKnob(knobFX, 509, 510);
-    // REVERB card
-    drawKnob(knobFX, 664, 437); drawKnob(knobFX, 764, 437); drawKnob(knobFX, 714, 510);
+    // FX knobs top row cy=397
+    drawKnob(knobFX, 41,390); drawKnob(knobFX,160,390); drawKnob(knobFX, 99,478);
+    drawKnob(knobFX,228,390); drawKnob(knobFX,352,390); drawKnob(knobFX,289,478);
+    drawKnob(knobFX,427,390); drawKnob(knobFX,532,390); drawKnob(knobFX,479,478);
+    drawKnob(knobFX,617,390); drawKnob(knobFX,725,390); drawKnob(knobFX,671,478);
 }
 
 void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
 {
-    // Gradient bar
-    juce::ColourGradient tg(juce::Colour(0xff13131e),0,0,kBg,0,(float)kTopH,false);
-    g.setGradientFill(tg); g.fillRect(0,0,W,kTopH);
-    g.setColour(kCardBd); g.drawHorizontalLine(kTopH,0.f,(float)W);
-
-    // Logo star mark
-    g.setColour(kPurple);
-    float lx=22.f, ly=25.f, lr=12.f;
-    for(int i=0;i<4;++i){
-        float a=i*juce::MathConstants<float>::pi*.5f;
-        g.drawLine(lx,ly, lx+lr*std::cos(a), ly+lr*std::sin(a), 1.5f);
-    }
-    g.fillEllipse(lx-3,ly-3,6,6);
-
-    // Brand text
-    g.setFont(juce::Font(20.f, juce::Font::bold));
-    g.setColour(kText);
-    g.drawText("ARCANE", 42, 13, 90, 24, juce::Justification::centredLeft);
-    g.setFont(juce::Font(12.f, juce::Font::bold));
-    g.setColour(kPurple);
-    g.drawText("ECLIPSE", 136, 16, 74, 18, juce::Justification::centredLeft);
-    g.setFont(juce::Font(9.f)); g.setColour(kMuted);
-    g.drawText("v1.0.0", 214, 20, 44, 12, juce::Justification::centredLeft);
-
-    // Preset box
-    int px=(W-280)/2, py=9, pw=280, ph=32;
-    g.setColour(juce::Colour(0xff0a0a14));
-    g.fillRoundedRectangle((float)px,(float)py,(float)pw,(float)ph,5.f);
-    g.setColour(kPurple);
-    g.drawRoundedRectangle((float)px,(float)py,(float)pw,(float)ph,5.f,1.5f);
-    g.setFont(juce::Font(12.f,juce::Font::bold)); g.setColour(kPurple);
-    g.drawText("01A", px+10,py+1,36,ph-2, juce::Justification::centredLeft);
-    g.setFont(juce::Font(12.f)); g.setColour(kText);
+    // Only draw live preset name — background handles everything else
     juce::String nm = proc.isNAMLoaded() ? proc.getLoadedNAMName() : "Mystic Drive";
     juce::String srStr = " [" + juce::String((int)proc.getSampleRate()) + "Hz]";
-    g.drawText(nm + srStr, px+52,py+1,pw-60,ph-2, juce::Justification::centredLeft);
-
-    // Right icons
-    auto drawIcon=[&](int x, bool orange){
-        g.setColour(juce::Colour(0xff1e1e2e));
-        g.fillRoundedRectangle((float)x,10.f,28.f,28.f,4.f);
-        g.setColour(orange?kPurple:kMuted);
-        g.drawRoundedRectangle((float)x,10.f,28.f,28.f,4.f,1.f);
-    };
-    drawIcon(W-92,false); g.setFont(juce::Font(11.f)); g.setColour(kMuted); g.drawText("⚙",W-92,10,28,28,juce::Justification::centred);
-    drawIcon(W-58,false); g.setColour(kMuted); g.drawText("?",W-58,10,28,28,juce::Justification::centred);
-    drawIcon(W-24,true);
-    g.setColour(kPurple);
-    g.drawEllipse((float)(W-18),15.f,10.f,10.f,1.5f);
-    g.fillRect((float)(W-14),10.f,2.f,6.f);
+    g.setFont(juce::Font(12.f)); g.setColour(kText);
+    g.drawText(nm + srStr, 460, 10, 380, 28, juce::Justification::centredLeft);
 }
+
 
 void ArcaneEclipseEditor::paintStrip(juce::Graphics& g)
 {
-    int Y=kTopH;
-    g.setColour(kStrip); g.fillRect(0,Y,W,kStripH);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y+kStripH,0.f,(float)W);
-
-    // VU meters
+    int Y = kTopH;
+    // VU meters only — background handles labels and chain nodes
     paintVU(g, {14.f,(float)(Y+16),16.f,88.f}, vuIn);
     paintVU(g, {(float)(W-30),(float)(Y+16),16.f,88.f}, vuOut);
-
-    // Labels — no power icons here, chain nodes ARE the toggles
-    g.setFont(juce::Font(8.f,juce::Font::bold));
-    g.setColour(kMuted);
-    g.drawText("INPUT",      52, Y+4,  58, 12, juce::Justification::centred);
-    g.drawText("GATE",      126, Y+4,  58, 12, juce::Justification::centred);
-    g.drawText("COMPRESSOR",W-196,Y+4, 84, 12, juce::Justification::centred);
-    g.drawText("OUTPUT",   W-109, Y+4, 58, 12, juce::Justification::centred);
 }
+
 
 void ArcaneEclipseEditor::paintVU(juce::Graphics& g, juce::Rectangle<float> b, float lvl)
 {
@@ -661,11 +571,10 @@ void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g, int idx,
 
 void ArcaneEclipseEditor::paintAmpHead(juce::Graphics& g)
 {
+    // Background image handles amp head visual — nothing to draw here
+    (void)g;
+    return;
     int Y=kTopH+kStripH, H2=kAmpH;
-    // Chassis
-    juce::ColourGradient cg(juce::Colour(0xff18182a),(float)0,(float)Y,
-                             juce::Colour(0xff0d0d14),(float)0,(float)(Y+H2),false);
-    g.setGradientFill(cg); g.fillRect(0,Y,W,H2);
 
     // Chassis border with purple glow
     g.setColour(kPurple.withAlpha(.15f));
@@ -723,8 +632,7 @@ void ArcaneEclipseEditor::paintAmpHead(juce::Graphics& g)
 void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
 {
     int Y=kTopH+kStripH+kAmpH;
-    g.setColour(kBg); g.fillRect(0,Y,W,kFXH);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
+    // Background image handles FX section — only draw titles/overlays
 
     int nCards=4, cabW=320;
     int fxAreaW=W-cabW-16;
@@ -770,9 +678,7 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
     int cabW=320;
     int cX=W-cabW-4;
 
-    // Cabinet card background
-    g.setColour(kCard); g.fillRoundedRectangle((float)cX,(float)(fxY+4),316.f,(float)(cabH-8),8.f);
-    g.setColour(kCardBd); g.drawRoundedRectangle((float)cX,(float)(fxY+4),316.f,(float)(cabH-8),8.f,1.f);
+    // Background image handles cabinet card visual
 
     // Single header — AMP & IR LOADER
     g.setColour(kCardBd); g.drawHorizontalLine(fxY+30,(float)cX,(float)(cX+316));
@@ -830,38 +736,18 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
 
 void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
 {
-    int Y=H-kFootH;
-    juce::ColourGradient fg(juce::Colour(0xff0f0f18),0,(float)Y,kBg,0,(float)H,false);
-    g.setGradientFill(fg); g.fillRect(0,Y,W,kFootH);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
-
-    // Headphone icon
-    g.setColour(kMuted);
-    juce::Path hp; hp.addCentredArc(24.f,(float)(Y+17),9.f,8.f,0.f,3.3f,6.22f,true);
-    g.strokePath(hp,juce::PathStrokeType(2.f));
-    g.fillEllipse(13.f,(float)(Y+21),5.f,8.f); g.fillEllipse(26.f,(float)(Y+21),5.f,8.f);
-    g.setFont(juce::Font(9.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("INPUT MONITOR",38,Y+10,105,18,juce::Justification::centredLeft);
+    int Y = H - kFootH;
+    // ON badge
     g.setColour(kPurple); g.fillRoundedRectangle(146.f,(float)(Y+11),30.f,15.f,3.f);
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(juce::Colours::white);
     g.drawText("ON",146,Y+11,30,15,juce::Justification::centred);
-
-    // Tabs
-    g.setColour(kPurple); g.fillRoundedRectangle((float)(W/2-34),(float)(Y+7),60.f,22.f,4.f);
-    g.setFont(juce::Font(10.f,juce::Font::bold)); g.setColour(juce::Colours::white);
-    g.drawText("RIG",W/2-34,Y+7,60,22,juce::Justification::centred);
-    g.setColour(kMuted); g.drawText("FX",W/2+34,Y+11,36,16,juce::Justification::centred);
-
-    // Status
-    auto dotDot=[&](int x,const juce::String& lbl,bool on){
-        g.setColour(on?kPurple:kMuted.withAlpha(.4f));
-        g.fillEllipse((float)x,(float)(Y+15),8.f,8.f);
-        g.setFont(juce::Font(9.f,juce::Font::bold)); g.setColour(kMuted);
-        g.drawText(lbl,x+11,Y+13,28,14,juce::Justification::centredLeft);
-    };
-    dotDot(W-90,"AMP",proc.isNAMLoaded());
-    dotDot(W-52,"CAB",proc.isIRLoaded());
+    // AMP/CAB dots
+    g.setColour(proc.isNAMLoaded() ? kPurple : kMuted.withAlpha(.4f));
+    g.fillEllipse((float)(W-90),(float)(Y+15),8.f,8.f);
+    g.setColour(proc.isIRLoaded() ? kMuted.brighter(.3f) : kMuted.withAlpha(.4f));
+    g.fillEllipse((float)(W-52),(float)(Y+15),8.f,8.f);
 }
+
 
 void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
 {
