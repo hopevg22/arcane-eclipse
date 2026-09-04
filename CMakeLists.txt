@@ -61,7 +61,18 @@ target_compile_definitions(ArcaneEclipse PUBLIC
 
 juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/background.png
-)
+    Resources/knobs/knob_strip.png
+    Resources/knobs/knob_amp.png
+    Resources/knobs/knob_fx.png
+    Resources/icons/00_GATE.png
+    Resources/icons/01_COMP.png
+    Resources/icons/02_DRIVE.png
+    Resources/icons/03_AMP.png
+    Resources/icons/04_CAB.png
+    Resources/icons/05_EQ.png
+    Resources/icons/06_MOD.png
+    Resources/icons/07_DELAY.png
+    Resources/icons/08_REVERB.png)
 
 target_link_libraries(ArcaneEclipse PRIVATE
     ArcaneEclipseAssets

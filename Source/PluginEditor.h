@@ -68,6 +68,7 @@ private:
     void timerCallback() override;
 
     // ── paint sections ────────────────────────────────────────────────────────
+    void paintKnobImages(juce::Graphics&);
     void paintTopBar(juce::Graphics&);
     void paintStrip(juce::Graphics&);
     void paintChain(juce::Graphics&);
@@ -139,5 +140,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooserModel, chooserIR;
 
     static const juce::String kChainLabels[9];
+    juce::Image chainIcons[9];
+    juce::Image knobStrip, knobAmp, knobFX, bgImage;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseEditor)
 };

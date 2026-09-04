@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <BinaryData.h>
 
 static const juce::Colour kPurple { 0xff8B5CF6 };
 static const juce::Colour kPurDim { 0xff6D45D4 };
@@ -212,6 +213,16 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     attComp2 = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
                    p.apvts, ArcaneEclipseProcessor::idCompOn, tbComp);
 
+    // Stomps — added LAST so they sit on top of knob sliders in z-order
+    // This ensures chain node clicks are not intercepted by underlying knobs
+    for (auto* s : {&stompOD,&stompMod,&stompDelay,&stompReverb})
+    {
+        addAndMakeVisible(*s);
+        s->toFront(false); // bring to front of z-order
+    }
+    tbGate.toFront(false);
+    tbComp.toFront(false);
+
     // X clear buttons
     addAndMakeVisible(btnClearModel);
     btnClearModel.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
@@ -275,6 +286,25 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     tabCab.setClickingTogglesState(false); tabIR.setClickingTogglesState(false);
     tabCab.onClick=[this]{activeCabTab=0;repaint();}; tabIR.onClick=[this]{activeCabTab=1;repaint();};
     addAndMakeVisible(tabCab); addAndMakeVisible(tabIR);
+
+    // Background image
+    bgImage = juce::ImageCache::getFromMemory(BinaryData::background_png, BinaryData::background_pngSize);
+
+    // Chain node icons
+    chainIcons[0] = juce::ImageCache::getFromMemory(BinaryData::_00_GATE_png,  BinaryData::_00_GATE_pngSize);
+    chainIcons[1] = juce::ImageCache::getFromMemory(BinaryData::_01_COMP_png,  BinaryData::_01_COMP_pngSize);
+    chainIcons[2] = juce::ImageCache::getFromMemory(BinaryData::_02_DRIVE_png, BinaryData::_02_DRIVE_pngSize);
+    chainIcons[3] = juce::ImageCache::getFromMemory(BinaryData::_03_AMP_png,   BinaryData::_03_AMP_pngSize);
+    chainIcons[4] = juce::ImageCache::getFromMemory(BinaryData::_04_CAB_png,   BinaryData::_04_CAB_pngSize);
+    chainIcons[5] = juce::ImageCache::getFromMemory(BinaryData::_05_EQ_png,    BinaryData::_05_EQ_pngSize);
+    chainIcons[6] = juce::ImageCache::getFromMemory(BinaryData::_06_MOD_png,   BinaryData::_06_MOD_pngSize);
+    chainIcons[7] = juce::ImageCache::getFromMemory(BinaryData::_07_DELAY_png, BinaryData::_07_DELAY_pngSize);
+    chainIcons[8] = juce::ImageCache::getFromMemory(BinaryData::_08_REVERB_png,BinaryData::_08_REVERB_pngSize);
+
+    // Knob images
+    knobStrip = juce::ImageCache::getFromMemory(BinaryData::knob_strip_png, BinaryData::knob_strip_pngSize);
+    knobAmp   = juce::ImageCache::getFromMemory(BinaryData::knob_amp_png,   BinaryData::knob_amp_pngSize);
+    knobFX    = juce::ImageCache::getFromMemory(BinaryData::knob_fx_png,    BinaryData::knob_fx_pngSize);
 
     startTimerHz(15);
 }
@@ -396,14 +426,62 @@ void ArcaneEclipseEditor::resized()
 // ── paint ─────────────────────────────────────────────────────────────────────
 void ArcaneEclipseEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(kBg);
-    paintTopBar(g);
-    paintStrip(g);
+    // Background image — the full photorealistic design
+    if (bgImage.isValid())
+        g.drawImage(bgImage, 0, 0, W, H, 0, 0, bgImage.getWidth(), bgImage.getHeight());
+    else
+        g.fillAll(kBg);
+
+    // Overlay: knob images at all positions
+    paintKnobImages(g);
+
+    // Overlay: chain nodes with icons + highlighting
     paintChain(g);
-    paintAmpHead(g);
+
+    // Overlay: strip labels and VU meters
+    paintStrip(g);
+
+    // Overlay: FX card titles + brightness feedback
     paintFXSection(g);
+
+    // Overlay: cabinet section text (MODEL/IR names, X buttons)
     paintCabSection(g);
+
+    // Overlay: footer elements
     paintFooter(g);
+
+    // Overlay: top bar elements (preset name, icons)
+    paintTopBar(g);
+}
+
+void ArcaneEclipseEditor::paintKnobImages(juce::Graphics& g)
+{
+    auto drawKnob = [&](const juce::Image& img, int cx, int cy)
+    {
+        if (!img.isValid()) return;
+        int hw = img.getWidth()/2, hh = img.getHeight()/2;
+        g.drawImage(img, cx-hw, cy-hh, img.getWidth(), img.getHeight(),
+                    0, 0, img.getWidth(), img.getHeight());
+    };
+
+    // Strip knobs (TYPE 1 — 70x70)
+    for (auto [cx,cy] : std::initializer_list<std::pair<int,int>>{
+        {72,106},{160,106},{940,106},{1028,106}})
+        drawKnob(knobStrip, cx, cy);
+
+    // Amp faceplate knobs (TYPE 2 — 86x86)
+    for (auto cx : {158,314,470,626,782,938})
+        drawKnob(knobAmp, cx, 325);
+
+    // FX knobs (TYPE 3 — 62x62)
+    // OD card
+    drawKnob(knobFX,  49, 437); drawKnob(knobFX, 149, 437); drawKnob(knobFX,  99, 510);
+    // MOD card
+    drawKnob(knobFX, 254, 437); drawKnob(knobFX, 354, 437); drawKnob(knobFX, 304, 510);
+    // DELAY card
+    drawKnob(knobFX, 459, 437); drawKnob(knobFX, 559, 437); drawKnob(knobFX, 509, 510);
+    // REVERB card
+    drawKnob(knobFX, 664, 437); drawKnob(knobFX, 764, 437); drawKnob(knobFX, 714, 510);
 }
 
 void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
@@ -527,66 +605,57 @@ void ArcaneEclipseEditor::paintChain(juce::Graphics& g)
     }
 }
 
-void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g,int idx,
-                                          juce::Rectangle<int> b,bool active)
+void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g, int idx,
+                                          juce::Rectangle<int> b, bool active)
 {
-    // Node box
-    g.setColour(active ? kPurple.withAlpha(.2f) : kCard);
-    g.fillRoundedRectangle(b.toFloat(),6.f);
+    // Node box background
+    g.setColour(active ? kPurple.withAlpha(.20f) : kCard);
+    g.fillRoundedRectangle(b.toFloat(), 6.f);
     g.setColour(active ? kPurple : kCardBd);
-    g.drawRoundedRectangle(b.toFloat(),6.f,active ? 2.f : 1.f);
+    g.drawRoundedRectangle(b.toFloat(), 6.f, active ? 2.f : 1.f);
 
-    // Icon
-    auto ib=b.toFloat().reduced(8.f,7.f);
-    float cx=ib.getCentreX(), cy=ib.getCentreY();
-    g.setColour(active ? kPurple : kMuted);
-    juce::Path p;
-
-    // 9 nodes: GATE(0) COMP(1) DRIVE(2) AMP(3) CAB(4) EQ(5) MOD(6) DELAY(7) REVERB(8)
-    switch(idx){
-        case 0: // GATE — slash line
-            g.drawLine(ib.getX(),ib.getBottom(),ib.getRight(),ib.getY(),2.f); break;
-        case 1: // COMP — compression curve
-            p.startNewSubPath(ib.getX(),ib.getBottom()); p.lineTo(cx,cy+3);
-            p.cubicTo(cx,cy+3,cx,cy-3,ib.getRight(),ib.getY());
-            g.strokePath(p,juce::PathStrokeType(1.8f)); break;
-        case 2: // DRIVE — pedal shape
-            g.fillEllipse(ib.getX(),cy-5,7,7); g.fillEllipse(ib.getX(),cy+1,7,7);
-            g.drawLine(ib.getX()+8,cy-1,ib.getRight(),cy-1,1.5f);
-            g.drawLine(ib.getX()+8,cy+4,ib.getRight(),cy+4,1.5f); break;
-        case 3: // AMP — amp head
-            g.drawRoundedRectangle(ib,2.f,1.8f);
-            g.drawLine(ib.getX(),ib.getY()+5,ib.getRight(),ib.getY()+5,1.f);
-            g.fillEllipse(cx-4,cy-3,8,8); break;
-        case 4: // CAB — speaker
-            g.drawRoundedRectangle(ib.reduced(0,1),3.f,1.8f);
-            g.drawEllipse(cx-5,cy-4,10,10,1.5f); g.drawEllipse(cx-2,cy-1,5,5,1.f); break;
-        case 5: // EQ — faders
-            { float pos[]={.4f,.7f,.25f};
-            for(int f=0;f<3;++f){ float fx=ib.getX()+f*(ib.getWidth()/2.5f);
-                g.drawLine(fx,ib.getY(),fx,ib.getBottom(),1.2f);
-                g.fillEllipse(fx-2.5f,ib.getY()+pos[f]*ib.getHeight()-2.5f,5,5); } break; }
-        case 6: // MOD — sine wave
-            p.startNewSubPath(ib.getX(), cy);
-            p.cubicTo(ib.getX()+6,cy-7, ib.getX()+12,cy+7, cx,cy);
-            p.cubicTo(cx+6,cy-7, ib.getRight()-5,cy+7, ib.getRight(),cy);
-            g.strokePath(p,juce::PathStrokeType(1.8f)); break;
-        case 7: // DELAY — clock
-            g.drawEllipse(ib.reduced(1),1.8f);
-            g.drawLine(cx,cy,cx,ib.getY()+5,1.8f); g.drawLine(cx,cy,cx+5,cy+4,1.8f); break;
-        case 8: // REVERB — ripples
-            for(int wave=0;wave<2;++wave){ float wy=cy-2+wave*7.f; p.clear();
-            p.startNewSubPath(ib.getX(),wy);
-            p.cubicTo(ib.getX()+5,wy-4,ib.getX()+10,wy+4,cx,wy);
-            p.cubicTo(cx+5,wy-4,ib.getRight()-5,wy+4,ib.getRight(),wy);
-            g.strokePath(p,juce::PathStrokeType(1.4f-wave*.3f)); } break;
+    // Draw PNG icon centred in node
+    if (chainIcons[idx].isValid())
+    {
+        // Tint icon purple when active, muted when inactive
+        auto iconArea = b.toFloat().reduced(6.f, 5.f);
+        if (active)
+        {
+            // Draw with purple tint
+            g.setOpacity(0.95f);
+            g.drawImage(chainIcons[idx],
+                        iconArea.getX(), iconArea.getY(),
+                        iconArea.getWidth(), iconArea.getHeight(),
+                        0, 0, chainIcons[idx].getWidth(), chainIcons[idx].getHeight());
+            // Overlay purple tint
+            g.setColour(kPurple.withAlpha(0.25f));
+            g.fillRoundedRectangle(iconArea, 4.f);
+        }
+        else
+        {
+            // Draw dimmed
+            g.setOpacity(0.55f);
+            g.drawImage(chainIcons[idx],
+                        iconArea.getX(), iconArea.getY(),
+                        iconArea.getWidth(), iconArea.getHeight(),
+                        0, 0, chainIcons[idx].getWidth(), chainIcons[idx].getHeight());
+            g.setOpacity(1.f);
+        }
+        g.setOpacity(1.f);
+    }
+    else
+    {
+        // Fallback: simple text if image failed to load
+        g.setFont(juce::Font(8.f, juce::Font::bold));
+        g.setColour(active ? kPurple : kMuted);
+        g.drawText(kChainLabels[idx], b, juce::Justification::centred);
     }
 
-    // Label
-    g.setFont(juce::Font(8.f,juce::Font::bold));
+    // Label below node
+    g.setFont(juce::Font(8.f, juce::Font::bold));
     g.setColour(active ? kPurple : kMuted);
     g.drawText(kChainLabels[idx],
-               juce::Rectangle<int>(b.getX()-4,b.getBottom()+2,b.getWidth()+8,12),
+               juce::Rectangle<int>(b.getX()-4, b.getBottom()+2, b.getWidth()+8, 12),
                juce::Justification::centred);
 }
 
