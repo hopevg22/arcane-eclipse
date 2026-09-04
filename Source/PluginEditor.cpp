@@ -97,7 +97,10 @@ void ArcLAF::drawButtonBackground(juce::Graphics& g, juce::Button& btn,
     g.drawRoundedRectangle(b, 5.f, 1.f);
 }
 
-void ArcLAF::drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) {}
+void ArcLAF::drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool)
+{
+    // Intentionally empty — toggle buttons on chain nodes are invisible/clickable only
+}
 
 void ArcLAF::drawComboBox(juce::Graphics& g, int w, int h, bool,
                            int, int, int, int, juce::ComboBox& cb)
@@ -131,31 +134,10 @@ void ArcLAF::drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& ar
 }
 
 // ── StompButton ───────────────────────────────────────────────────────────────
-void StompButton::paint(juce::Graphics& g)
+void StompButton::paint(juce::Graphics&)
 {
-    bool on = getToggleState();
-    auto b = getLocalBounds().toFloat().reduced(2.f);
-    float cx = b.getCentreX(), cy = b.getCentreY(), r = b.getWidth()*.5f;
-
-    // Outer ring
-    g.setColour(juce::Colour(0xff2a2a3e));
-    g.fillEllipse(b);
-    g.setColour(on ? kPurple : juce::Colour(0xff3a3a5a));
-    g.drawEllipse(b, 2.f);
-
-    // Inner body
-    juce::ColourGradient bg(juce::Colour(0xff252535), cx-r*.3f, cy-r*.3f,
-                             juce::Colour(0xff0d0d18), cx+r*.4f, cy+r*.4f, true);
-    g.setGradientFill(bg);
-    g.fillEllipse(b.reduced(4.f));
-
-    // LED dot
-    g.setColour(on ? kPurple : juce::Colour(0xff2a2a3e));
-    g.fillEllipse(cx-4, cy-4, 8, 8);
-    if (on) {
-        g.setColour(kPurple.withAlpha(.3f));
-        g.fillEllipse(cx-7, cy-7, 14, 14);
-    }
+    // Intentionally empty — the chain node in paintChain() draws the visual.
+    // This button is invisible but fully clickable.
 }
 
 // ── AKnob ─────────────────────────────────────────────────────────────────────
@@ -320,10 +302,22 @@ void ArcaneEclipseEditor::resized()
     int cabY   = fxY + kFXH;
     int footY  = H - kFootH;
 
-    // ── Strip gate/comp power toggles ─────────────────────────────────────────
-    // Small invisible toggle buttons positioned over the power dot icons
-    tbGate.setBounds(182, kTopH+6, 14, 14);
-    tbComp.setBounds(W-112, kTopH+6, 14, 14);
+    // ── Toggle buttons sit over their respective chain nodes ─────────────────
+    // Each chain node IS the toggle — clicking the node turns the effect on/off
+    // Node positions calculated same as chainNodeBounds()
+    {
+        int nodeW=52, nodeH=46;
+        int totalW=9*nodeW+8*6;
+        int startX=(W-totalW)/2;
+        int nodeY=kTopH+(kStripH-nodeH)/2;
+        auto nb=[&](int i){ return juce::Rectangle<int>(startX+i*(nodeW+6),nodeY,nodeW,nodeH); };
+        tbGate .setBounds(nb(0)); // GATE node
+        tbComp .setBounds(nb(1)); // COMP node
+        stompOD    .setBounds(nb(2)); // DRIVE node
+        stompMod   .setBounds(nb(6)); // MOD node
+        stompDelay .setBounds(nb(7)); // DELAY node
+        stompReverb.setBounds(nb(8)); // REVERB node
+    }
 
     // ── Strip knobs — moved inward away from VU meters ───────────────────────
     int kSz = 58;
@@ -346,39 +340,38 @@ void ArcaneEclipseEditor::resized()
     int nCards=4, cabW=320;
     int fxAreaW = W-cabW-16;
     int cardW = fxAreaW/nCards - 6;
-    int fxKSz=48, fxTopRow=fxY+60, fxBotRow=fxY+118;
+    int fxKSz=48, fxTopRow=fxY+75, fxBotRow=fxY+140;
 
-    // OD card knobs
+    // OD card knobs — use full card height since no stomp
     int odX = 8;
-    kODDrive.place(odX+cardW/4,     fxTopRow, fxKSz);
-    kODTone .place(odX+cardW*3/4,   fxTopRow, fxKSz);
-    kODLevel.place(odX+cardW/2,     fxBotRow, fxKSz);
-    stompOD.setBounds(odX+cardW/2-16, fxY+kFXH-56, 32, 32);
-    btnBrowse.setBounds(odX+6, fxY+kFXH-30, cardW-12, 22);
+    int fxMidRow = fxY + 75;
+    int fxBotRow2 = fxY + 140;
+    kODDrive.place(odX+cardW/4,     fxMidRow,  fxKSz);
+    kODTone .place(odX+cardW*3/4,   fxMidRow,  fxKSz);
+    kODLevel.place(odX+cardW/2,     fxBotRow2, fxKSz);
+    // No stomp buttons in FX cards — stomps now live on chain nodes
+    btnBrowse.setBounds(-200,-200,1,1); // hidden
 
     // Mod card
     int modX = odX+cardW+6;
     kModRate .place(modX+cardW/4,   fxTopRow, fxKSz);
     kModDepth.place(modX+cardW*3/4, fxTopRow, fxKSz);
     kModMix  .place(modX+cardW/2,   fxBotRow, fxKSz);
-    stompMod.setBounds(modX+cardW/2-16, fxY+kFXH-56, 32, 32);
-    comboModType.setBounds(modX+6, fxY+kFXH-30, cardW-12, 22);
+    comboModType.setBounds(modX+6, fxY+kFXH-28, cardW-12, 22);
 
     // Delay card
     int dlX = modX+cardW+6;
     kDTime    .place(dlX+cardW/4,   fxTopRow, fxKSz);
     kDFeedback.place(dlX+cardW*3/4, fxTopRow, fxKSz);
     kDMix     .place(dlX+cardW/2,   fxBotRow, fxKSz);
-    stompDelay.setBounds(dlX+cardW/2-16, fxY+kFXH-56, 32, 32);
-    comboDelayType.setBounds(dlX+6, fxY+kFXH-30, cardW-12, 22);
+    comboDelayType.setBounds(dlX+6, fxY+kFXH-28, cardW-12, 22);
 
     // Reverb card
     int rvX = dlX+cardW+6;
     kRDecay.place(rvX+cardW/4,   fxTopRow, fxKSz);
     kRSize .place(rvX+cardW*3/4, fxTopRow, fxKSz);
     kRMix  .place(rvX+cardW/2,   fxBotRow, fxKSz);
-    stompReverb.setBounds(rvX+cardW/2-16, fxY+kFXH-56, 32, 32);
-    comboReverbType.setBounds(rvX+6, fxY+kFXH-30, cardW-12, 22);
+    comboReverbType.setBounds(rvX+6, fxY+kFXH-28, cardW-12, 22);
 
     // ── Cabinet section ───────────────────────────────────────────────────────
     int cX = W-cabW-4;
@@ -477,30 +470,13 @@ void ArcaneEclipseEditor::paintStrip(juce::Graphics& g)
     paintVU(g, {14.f,(float)(Y+16),16.f,88.f}, vuIn);
     paintVU(g, {(float)(W-30),(float)(Y+16),16.f,88.f}, vuOut);
 
-    // Labels + power toggle icons
-    g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("INPUT",  52,Y+4,58,12,juce::Justification::centred);
-    g.drawText("GATE",  126,Y+4,58,12,juce::Justification::centred);
-
-    // Gate power icon — highlights when on
-    bool gateOn = tbGate.getToggleState();
-    float gpx=182.f, gpy=(float)(Y+6);
-    g.setColour(gateOn ? kPurple : kMuted);
-    g.drawEllipse(gpx,gpy+2,10.f,10.f,1.5f);
-    g.fillRect(gpx+4,gpy-1,2.f,5.f);
-
+    // Labels — no power icons here, chain nodes ARE the toggles
+    g.setFont(juce::Font(8.f,juce::Font::bold));
     g.setColour(kMuted);
-    g.drawText("COMPRESSOR", W-196,Y+4,84,12,juce::Justification::centred);
-
-    // Comp power icon — highlights when on
-    bool compOn = tbComp.getToggleState();
-    float cpx=(float)(W-114), cpy=(float)(Y+6);
-    g.setColour(compOn ? kPurple : kMuted);
-    g.drawEllipse(cpx,cpy+2,10.f,10.f,1.5f);
-    g.fillRect(cpx+4,cpy-1,2.f,5.f);
-
-    g.setColour(kMuted);
-    g.drawText("OUTPUT", W-109,Y+4,58,12,juce::Justification::centred);
+    g.drawText("INPUT",      52, Y+4,  58, 12, juce::Justification::centred);
+    g.drawText("GATE",      126, Y+4,  58, 12, juce::Justification::centred);
+    g.drawText("COMPRESSOR",W-196,Y+4, 84, 12, juce::Justification::centred);
+    g.drawText("OUTPUT",   W-109, Y+4, 58, 12, juce::Justification::centred);
 }
 
 void ArcaneEclipseEditor::paintVU(juce::Graphics& g, juce::Rectangle<float> b, float lvl)
@@ -693,21 +669,23 @@ void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
         int bX=cardX0+i*(cardW+6);
         bool on=tbs[i]->getToggleState();
 
-        // Card background
-        g.setColour(kCard); g.fillRoundedRectangle((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8),8.f);
-        g.setColour(on?kPurple.withAlpha(.5f):kCardBd);
+        // Card background — slightly brighter when on
+        g.setColour(on ? juce::Colour(0xff1e1e2e) : kCard);
+        g.fillRoundedRectangle((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8),8.f);
+        g.setColour(on ? kPurple.withAlpha(.6f) : kCardBd);
         g.drawRoundedRectangle((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8),8.f,on?1.5f:1.f);
 
-        // Title
+        // Title — centred, brightness changes with on/off state
         g.setFont(juce::Font(10.f,juce::Font::bold));
-        g.setColour(on?kPurple:kMuted);
-        g.drawText(titles[i], bX+10, Y+14, cardW-50, 14, juce::Justification::centredLeft);
+        // ON: bright white  OFF: dim muted
+        g.setColour(on ? juce::Colours::white : kMuted.withAlpha(.5f));
+        g.drawText(titles[i], bX+4, Y+10, cardW-8, 16, juce::Justification::centred);
 
-        // Power circle icon
-        float pix=(float)(bX+cardW-26), piy=(float)(Y+13);
-        g.setColour(on?kPurple:kMuted);
-        g.drawEllipse(pix,piy+2,12.f,12.f,1.5f);
-        g.fillRect(pix+5,piy-1,2.f,6.f);
+        // Subtle glow line at top of card when on
+        if (on) {
+            g.setColour(kPurple.withAlpha(.4f));
+            g.fillRect((float)(bX+1), (float)(Y+4), (float)(cardW-2), 2.f);
+        }
     }
 
     // Divider between FX and cab
@@ -818,8 +796,6 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
 
 void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
 {
-    for(int i=0;i<8;++i)
-        if(chainNodeBounds(i).contains(e.getPosition()))
-            {activeNode=i; repaint(); return;}
+    // Chain nodes are now invisible toggle buttons — no manual hit testing needed
     AudioProcessorEditor::mouseDown(e);
 }
