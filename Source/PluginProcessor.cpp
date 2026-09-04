@@ -16,6 +16,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idInputGain,  "Input Gain",  Range(-20.f,20.f,.1f), 0.f, "dB"));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idOutputGain, "Output Gain", Range(-20.f,20.f,.1f), 0.f, "dB"));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idNoiseGate,  "Noise Gate",  Range(-80.f,-40.f,.5f),-60.f,"dB"));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idGateOn,     "Gate On",     false));
     p.push_back(std::make_unique<juce::AudioParameterBool> (idCabBypass,  "Cab Bypass",  false));
 
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmpGain,     "Gain",     Range(0.f,10.f,.1f), 4.2f));
@@ -25,7 +26,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmpPresence, "Presence", Range(0.f,10.f,.1f), 4.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmpMaster,   "Master",   Range(0.f,10.f,.1f), 6.5f));
 
-    p.push_back(std::make_unique<juce::AudioParameterBool> (idCompOn,      "Comp On",  false));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idCompOn,      "Comp On",  false)); // default OFF
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idCompThresh,  "Threshold",Range(-40.f,0.f,.5f),-18.f,"dB"));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idCompRatio,   "Ratio",    Range(1.f,20.f,.1f),4.f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idCompAttack,  "Attack",   Range(.1f,100.f,.1f),10.f,"ms"));
@@ -98,11 +99,32 @@ void ArcaneEclipseProcessor::updateEQ()
     float mDb = toDb(apvts.getRawParameterValue(idAmpMid)->load());
     float tDb = toDb(apvts.getRawParameterValue(idAmpTreble)->load());
     float pDb = toDb(apvts.getRawParameterValue(idAmpPresence)->load());
+
+    // Only recalculate if values have actually changed — avoids mid-stream
+    // coefficient updates that cause IIR state inconsistency (robotic artifacts)
+    static float lastB=-999,lastM=-999,lastT=-999,lastP=-999;
+    static double lastSR = 0;
+    if (std::abs(bDb-lastB)<0.01f && std::abs(mDb-lastM)<0.01f &&
+        std::abs(tDb-lastT)<0.01f && std::abs(pDb-lastP)<0.01f &&
+        std::abs(sr-lastSR)<1.0)
+        return; // nothing changed — keep existing coefficients
+
+    lastB=bDb; lastM=mDb; lastT=tDb; lastP=pDb; lastSR=sr;
+
+    // Reset filter state before applying new coefficients to avoid transients
     for (int ch = 0; ch < 2; ++ch) {
-        *bassFilter[ch].coefficients     = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(sr,150.,0.71,juce::Decibels::decibelsToGain(bDb));
-        *midFilter[ch].coefficients      = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(sr,600.,0.71,juce::Decibels::decibelsToGain(mDb));
-        *trebleFilter[ch].coefficients   = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(sr,3000.,0.71,juce::Decibels::decibelsToGain(tDb));
-        *presenceFilter[ch].coefficients = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(sr,6000.,0.71,juce::Decibels::decibelsToGain(pDb));
+        bassFilter[ch].reset();
+        midFilter[ch].reset();
+        trebleFilter[ch].reset();
+        presenceFilter[ch].reset();
+        *bassFilter[ch].coefficients     = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(
+                                               sr,150.,0.71,juce::Decibels::decibelsToGain(bDb));
+        *midFilter[ch].coefficients      = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(
+                                               sr,600.,0.71,juce::Decibels::decibelsToGain(mDb));
+        *trebleFilter[ch].coefficients   = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(
+                                               sr,3000.,0.71,juce::Decibels::decibelsToGain(tDb));
+        *presenceFilter[ch].coefficients = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(
+                                               sr,6000.,0.71,juce::Decibels::decibelsToGain(pDb));
     }
 }
 
@@ -114,7 +136,8 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     // 1. INPUT GAIN
     buffer.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idInputGain)->load()));
 
-    // 2. NOISE GATE — first in chain, smooth gain reduction
+    // 2. NOISE GATE — only when enabled
+    if (apvts.getRawParameterValue(idGateOn)->load() > .5f)
     {
         float thresh = juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idNoiseGate)->load());
         for (int n = 0; n < numSamples; ++n) {
@@ -153,50 +176,80 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     buffer.applyGain(juce::Decibels::decibelsToGain(ampGainDb));
 
     // 6. NAM MODEL — the amp simulation
-    if (namModel != nullptr) {
-        const double namSR  = 48000.0;
-        const double ratioUp   = namSR / currentSampleRate;   // host -> NAM
-        const double ratioDown = currentSampleRate / namSR;   // NAM  -> host
+    if (namModel != nullptr)
+    {
+        const double namSR = 48000.0;
 
-        // Pre-allocate buffers — no heap alloc inside the loop
-        int namSamples = (int)std::ceil(numSamples * ratioUp) + 8;
-        if ((int)resampleBufIn.size()  < namSamples + 16)
-            resampleBufIn.assign((size_t)(namSamples + 32), 0.f);
-        if ((int)resampleBufOut.size() < namSamples + 16)
-            resampleBufOut.assign((size_t)(namSamples + 32), 0.f);
-        if ((int)monoBuf.size() < numSamples + 16)
-            monoBuf.assign((size_t)(numSamples + 32), 0.f);
-        if ((int)namOutBuf.size() < numSamples + 16)
-            namOutBuf.assign((size_t)(numSamples + 32), 0.f);
+        if (std::abs(currentSampleRate - namSR) < 1.0)
+        {
+            // Host is already 48kHz — no resampling needed, direct processing
+            // Mix to mono in-place
+            if ((int)monoBuf.size() < numSamples + 8)
+                monoBuf.assign((size_t)(numSamples + 16), 0.f);
+            if ((int)namOutBuf.size() < numSamples + 8)
+                namOutBuf.assign((size_t)(numSamples + 16), 0.f);
 
-        // Mix to mono
-        auto* L = buffer.getReadPointer(0);
-        for (int n = 0; n < numSamples; ++n)
-            monoBuf[(size_t)n] = numCh > 1 ? .5f*(L[n]+buffer.getReadPointer(1)[n]) : L[n];
+            auto* L = buffer.getReadPointer(0);
+            for (int n = 0; n < numSamples; ++n)
+                monoBuf[(size_t)n] = numCh > 1
+                    ? 0.5f * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
 
-        // Upsample to 48 kHz
-        int actualUp = resamplerIn.process(ratioUp,
-                           monoBuf.data(), resampleBufIn.data(),
-                           namSamples, numSamples, 0);
-        actualUp = juce::jlimit(1, namSamples, actualUp);
+            namModel->Process(monoBuf.data(), namOutBuf.data(), (size_t)numSamples);
 
-        // Zero pad output buffer before NAM writes to it
-        std::fill(resampleBufOut.begin(), resampleBufOut.begin() + actualUp, 0.f);
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                auto* dst = buffer.getWritePointer(ch);
+                for (int n = 0; n < numSamples; ++n)
+                    dst[n] = namOutBuf[(size_t)n];
+            }
+        }
+        else
+        {
+            // Resample using JUCE's interpolators with proper block sizing
+            const double ratio = namSR / currentSampleRate;
+            int namSamples = (int)std::ceil((double)numSamples * ratio) + 4;
 
-        // NAM inference at 48 kHz
-        namModel->Process(resampleBufIn.data(), resampleBufOut.data(), (size_t)actualUp);
+            if ((int)resampleBufIn.size()  < namSamples + 8)
+                resampleBufIn.assign((size_t)(namSamples + 16), 0.f);
+            if ((int)resampleBufOut.size() < namSamples + 8)
+                resampleBufOut.assign((size_t)(namSamples + 16), 0.f);
+            if ((int)monoBuf.size()   < numSamples + 8)
+                monoBuf.assign((size_t)(numSamples + 16), 0.f);
+            if ((int)namOutBuf.size() < numSamples + 8)
+                namOutBuf.assign((size_t)(numSamples + 16), 0.f);
 
-        // Downsample back to host rate — pass actualUp as input count
-        int actualDown = resamplerOut.process(ratioDown,
-                             resampleBufOut.data(), namOutBuf.data(),
-                             numSamples, actualUp, 0);
-        actualDown = juce::jlimit(0, numSamples, actualDown);
+            // Mix to mono
+            auto* L = buffer.getReadPointer(0);
+            for (int n = 0; n < numSamples; ++n)
+                monoBuf[(size_t)n] = numCh > 1
+                    ? 0.5f * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
 
-        // Write to all output channels
-        for (int ch = 0; ch < numCh; ++ch) {
-            auto* dst = buffer.getWritePointer(ch);
-            for (int n = 0; n < actualDown;    ++n) dst[n] = namOutBuf[(size_t)n];
-            for (int n = actualDown; n < numSamples; ++n) dst[n] = 0.f;
+            // Upsample host -> 48kHz
+            int actualUp = resamplerIn.process(
+                ratio, monoBuf.data(), resampleBufIn.data(),
+                namSamples, numSamples, 0);
+            actualUp = juce::jlimit(1, namSamples, actualUp);
+
+            // NAM inference
+            std::fill(resampleBufOut.begin(),
+                      resampleBufOut.begin() + actualUp + 4, 0.f);
+            namModel->Process(resampleBufIn.data(),
+                              resampleBufOut.data(), (size_t)actualUp);
+
+            // Downsample 48kHz -> host
+            int actualDown = resamplerOut.process(
+                1.0 / ratio, resampleBufOut.data(),
+                namOutBuf.data(), numSamples, actualUp, 0);
+            actualDown = juce::jlimit(0, numSamples, actualDown);
+
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                auto* dst = buffer.getWritePointer(ch);
+                for (int n = 0; n < actualDown; ++n)
+                    dst[n] = namOutBuf[(size_t)n];
+                for (int n = actualDown; n < numSamples; ++n)
+                    dst[n] = 0.f;
+            }
         }
     }
 

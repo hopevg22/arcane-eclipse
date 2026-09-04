@@ -115,6 +115,14 @@ private:
         attOD, attMod, attDelay, attReverb, attCab;
     juce::ToggleButton tbCab{""};
 
+    // Gate and Comp toggles in strip
+    juce::ToggleButton tbGate{""}, tbComp{""};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        attGate, attComp2;
+
+    // X clear buttons for model and IR
+    juce::TextButton btnClearModel{"x"}, btnClearIR{"x"};
+
     // Dropdowns
     juce::ComboBox comboModType, comboDelayType, comboReverbType, comboCab;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
@@ -130,6 +138,6 @@ private:
 
     std::unique_ptr<juce::FileChooser> chooserModel, chooserIR;
 
-    static const juce::String kChainLabels[8];
+    static const juce::String kChainLabels[9];
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseEditor)
 };

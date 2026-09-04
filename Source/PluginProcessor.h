@@ -35,6 +35,8 @@ public:
 
     bool loadNAMModel(const juce::File& f);
     bool loadIR(const juce::File& f);
+    void unloadNAMModel() { const juce::ScopedLock lock(getCallbackLock()); namModel.reset(); loadedNAMName = ""; }
+    void unloadIR()       { irLoaded = false; loadedIRName = ""; convolution.reset(); }
     juce::String getLoadedNAMName() const { return loadedNAMName; }
     juce::String getLoadedIRName()  const { return loadedIRName; }
     bool isNAMLoaded() const { return namModel != nullptr; }
@@ -47,6 +49,7 @@ public:
     static constexpr auto idInputGain   = "inputGain";
     static constexpr auto idOutputGain  = "outputGain";
     static constexpr auto idNoiseGate   = "noiseGate";
+    static constexpr auto idGateOn      = "gateOn";
     static constexpr auto idCabBypass   = "cabBypass";
     // Amp
     static constexpr auto idAmpGain     = "ampGain";
@@ -92,7 +95,7 @@ private:
     juce::String loadedNAMName, loadedIRName;
     bool irLoaded = false;
 
-    juce::LagrangeInterpolator resamplerIn, resamplerOut;
+    juce::CatmullRomInterpolator resamplerIn, resamplerOut;
     double currentSampleRate = 44100.0;
     std::vector<float> resampleBufIn, resampleBufOut, monoBuf, namOutBuf;
 

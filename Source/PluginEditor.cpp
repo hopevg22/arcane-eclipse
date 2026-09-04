@@ -10,8 +10,8 @@ static const juce::Colour kText   { 0xfff0f0ff };
 static const juce::Colour kMuted  { 0xff7878aa };
 static const juce::Colour kStrip  { 0xff0f0f18 };
 
-const juce::String ArcaneEclipseEditor::kChainLabels[8] =
-    {"GATE","COMP","DRIVE","AMP","CAB","EQ","DELAY","REVERB"};
+const juce::String ArcaneEclipseEditor::kChainLabels[9] =
+    {"GATE","COMP","DRIVE","AMP","CAB","EQ","MOD","DELAY","REVERB"};
 
 // ── ArcLAF ────────────────────────────────────────────────────────────────────
 ArcLAF::ArcLAF()
@@ -223,8 +223,23 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     kRSize    .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbSize,     "SIZE",     &laf);
     kRMix     .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbMix,      "MIX",      &laf);
 
-    // Stomps
-    for (auto* s : {&stompOD,&stompMod,&stompDelay,&stompReverb}) addAndMakeVisible(*s);
+    // Gate and Comp strip toggles
+    addAndMakeVisible(tbGate); addAndMakeVisible(tbComp);
+    attGate  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                   p.apvts, ArcaneEclipseProcessor::idGateOn, tbGate);
+    attComp2 = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                   p.apvts, ArcaneEclipseProcessor::idCompOn, tbComp);
+
+    // X clear buttons
+    addAndMakeVisible(btnClearModel);
+    btnClearModel.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+    btnClearModel.setColour(juce::TextButton::textColourOffId, kMuted);
+    btnClearModel.onClick = [this]{ proc.unloadNAMModel(); repaint(); };
+
+    addAndMakeVisible(btnClearIR);
+    btnClearIR.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+    btnClearIR.setColour(juce::TextButton::textColourOffId, kMuted);
+    btnClearIR.onClick = [this]{ proc.unloadIR(); repaint(); };
     attOD    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idODOn,    stompOD);
     attMod   = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idModOn,   stompMod);
     attDelay = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idDelayOn, stompDelay);
@@ -288,12 +303,11 @@ void ArcaneEclipseEditor::timerCallback() { vuIn*=.92f; vuOut*=.92f; repaint(); 
 // ── Layout ────────────────────────────────────────────────────────────────────
 juce::Rectangle<int> ArcaneEclipseEditor::chainNodeBounds(int i) const
 {
-    // 8 nodes centred between strip knobs
-    // Available x: 260 to 840 (leaving room for strip knobs on edges)
-    int nodeW = 54, nodeH = 48;
-    int totalW = 8*nodeW + 7*8; // 8 nodes, 8px gaps
+    // 9 nodes: GATE COMP DRIVE AMP CAB EQ MOD DELAY REVERB
+    int nodeW = 52, nodeH = 46;
+    int totalW = 9*nodeW + 8*6;
     int startX = (W - totalW) / 2;
-    int x = startX + i*(nodeW+8);
+    int x = startX + i*(nodeW+6);
     int y = kTopH + (kStripH - nodeH)/2;
     return {x, y, nodeW, nodeH};
 }
@@ -305,6 +319,11 @@ void ArcaneEclipseEditor::resized()
     int fxY    = ampY + kAmpH;
     int cabY   = fxY + kFXH;
     int footY  = H - kFootH;
+
+    // ── Strip gate/comp power toggles ─────────────────────────────────────────
+    // Small invisible toggle buttons positioned over the power dot icons
+    tbGate.setBounds(182, kTopH+6, 14, 14);
+    tbComp.setBounds(W-112, kTopH+6, 14, 14);
 
     // ── Strip knobs — moved inward away from VU meters ───────────────────────
     int kSz = 58;
@@ -365,7 +384,8 @@ void ArcaneEclipseEditor::resized()
     int cX = W-cabW-4;
     // No tabs — single "AMP & IR LOADER" panel
     int cabH = footY - fxY;
-    sliderDist  .setBounds(cX+4,    fxY+76, cabW-12, 18);
+    // No distance slider
+    sliderDist.setBounds(-200,-200,1,1);
     btnLoadModel.setBounds(cX+4,   fxY+cabH-62, (cabW-16)/2, 32);
     btnLoadIR   .setBounds(cX+4+(cabW-16)/2+8, fxY+cabH-62, (cabW-16)/2, 32);
     tbCab.setBounds(W-20, fxY+2, 16, 16);
@@ -373,6 +393,11 @@ void ArcaneEclipseEditor::resized()
     tabCab.setBounds(-200,-200,1,1);
     tabIR .setBounds(-200,-200,1,1);
     comboCab.setBounds(-200,-200,1,1);
+    // X clear buttons — positioned beside MODEL and IR labels
+    btnClearModel.setBounds(cX+cabW-28, fxY+50, 18, 18);
+    btnClearIR   .setBounds(cX+cabW-28, fxY+88, 18, 18);
+    // BROWSE NAM hidden
+    btnBrowse.setBounds(-200,-200,1,1);
 }
 
 // ── paint ─────────────────────────────────────────────────────────────────────
@@ -424,7 +449,8 @@ void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
     g.drawText("01A", px+10,py+1,36,ph-2, juce::Justification::centredLeft);
     g.setFont(juce::Font(12.f)); g.setColour(kText);
     juce::String nm = proc.isNAMLoaded() ? proc.getLoadedNAMName() : "Mystic Drive";
-    g.drawText(nm, px+52,py+1,pw-60,ph-2, juce::Justification::centredLeft);
+    juce::String srStr = " [" + juce::String((int)proc.getSampleRate()) + "Hz]";
+    g.drawText(nm + srStr, px+52,py+1,pw-60,ph-2, juce::Justification::centredLeft);
 
     // Right icons
     auto drawIcon=[&](int x, bool orange){
@@ -451,16 +477,29 @@ void ArcaneEclipseEditor::paintStrip(juce::Graphics& g)
     paintVU(g, {14.f,(float)(Y+16),16.f,88.f}, vuIn);
     paintVU(g, {(float)(W-30),(float)(Y+16),16.f,88.f}, vuOut);
 
-    // Labels above strip knobs — moved inward to match knob positions
+    // Labels + power toggle icons
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("INPUT",   52,Y+4,58,12,juce::Justification::centred);
-    g.drawText("GATE",   126,Y+4,58,12,juce::Justification::centred);
-    // Power dot beside GATE
-    g.setColour(kPurple);
-    g.fillEllipse(182.f,(float)(Y+8),6.f,6.f);
+    g.drawText("INPUT",  52,Y+4,58,12,juce::Justification::centred);
+    g.drawText("GATE",  126,Y+4,58,12,juce::Justification::centred);
+
+    // Gate power icon — highlights when on
+    bool gateOn = tbGate.getToggleState();
+    float gpx=182.f, gpy=(float)(Y+6);
+    g.setColour(gateOn ? kPurple : kMuted);
+    g.drawEllipse(gpx,gpy+2,10.f,10.f,1.5f);
+    g.fillRect(gpx+4,gpy-1,2.f,5.f);
+
+    g.setColour(kMuted);
     g.drawText("COMPRESSOR", W-196,Y+4,84,12,juce::Justification::centred);
-    // Power dot beside COMP
-    g.fillEllipse((float)(W-114),(float)(Y+8),6.f,6.f);
+
+    // Comp power icon — highlights when on
+    bool compOn = tbComp.getToggleState();
+    float cpx=(float)(W-114), cpy=(float)(Y+6);
+    g.setColour(compOn ? kPurple : kMuted);
+    g.drawEllipse(cpx,cpy+2,10.f,10.f,1.5f);
+    g.fillRect(cpx+4,cpy-1,2.f,5.f);
+
+    g.setColour(kMuted);
     g.drawText("OUTPUT", W-109,Y+4,58,12,juce::Justification::centred);
 }
 
@@ -481,14 +520,30 @@ void ArcaneEclipseEditor::paintVU(juce::Graphics& g, juce::Rectangle<float> b, f
 
 void ArcaneEclipseEditor::paintChain(juce::Graphics& g)
 {
-    for(int i=0;i<8;++i){
-        auto nb=chainNodeBounds(i);
-        paintChainNode(g,i,nb,i==activeNode);
-        if(i<7){
-            auto nb2=chainNodeBounds(i+1);
+    // Determine active state for each of 9 nodes
+    // Order: GATE(0) COMP(1) DRIVE(2) AMP(3) CAB(4) EQ(5) MOD(6) DELAY(7) REVERB(8)
+    bool nodeActive[9] = {
+        tbGate .getToggleState(),           // GATE
+        tbComp .getToggleState(),           // COMP
+        stompOD.getToggleState(),           // DRIVE
+        proc.isNAMLoaded(),                 // AMP
+        proc.isIRLoaded(),                  // CAB
+        proc.isNAMLoaded(),                 // EQ — active whenever amp running
+        stompMod.getToggleState(),          // MOD
+        stompDelay.getToggleState(),        // DELAY
+        stompReverb.getToggleState()        // REVERB
+    };
+
+    for (int i = 0; i < 9; ++i) {
+        auto nb = chainNodeBounds(i);
+        paintChainNode(g, i, nb, nodeActive[i]);
+        if (i < 8) {
+            auto nb2 = chainNodeBounds(i+1);
             float ax=(float)nb.getRight()+2, ay=(float)nb.getCentreY();
             float ax2=(float)nb2.getX()-2;
-            g.setColour(kPurple.withAlpha(.5f));
+            // Arrow colour — purple if both connected nodes active
+            g.setColour((nodeActive[i] && nodeActive[i+1])
+                        ? kPurple.withAlpha(.8f) : kMuted.withAlpha(.3f));
             g.drawLine(ax,ay,ax2,ay,1.5f);
             g.drawLine(ax2-5,ay-4,ax2,ay,1.5f);
             g.drawLine(ax2-5,ay+4,ax2,ay,1.5f);
@@ -500,44 +555,60 @@ void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g,int idx,
                                           juce::Rectangle<int> b,bool active)
 {
     // Node box
-    g.setColour(active?kPurple.withAlpha(.18f):kCard);
+    g.setColour(active ? kPurple.withAlpha(.2f) : kCard);
     g.fillRoundedRectangle(b.toFloat(),6.f);
-    g.setColour(active?kPurple:kCardBd);
-    g.drawRoundedRectangle(b.toFloat(),6.f,active?2.f:1.f);
+    g.setColour(active ? kPurple : kCardBd);
+    g.drawRoundedRectangle(b.toFloat(),6.f,active ? 2.f : 1.f);
 
     // Icon
     auto ib=b.toFloat().reduced(8.f,7.f);
     float cx=ib.getCentreX(), cy=ib.getCentreY();
-    g.setColour(active?kPurple:kMuted);
+    g.setColour(active ? kPurple : kMuted);
     juce::Path p;
+
+    // 9 nodes: GATE(0) COMP(1) DRIVE(2) AMP(3) CAB(4) EQ(5) MOD(6) DELAY(7) REVERB(8)
     switch(idx){
-        case 0: g.drawLine(ib.getX(),ib.getBottom(),ib.getRight(),ib.getY(),2.f); break;
-        case 1: p.startNewSubPath(ib.getX(),ib.getBottom()); p.lineTo(cx,cy+3);
-                p.cubicTo(cx,cy+3,cx,cy-3,ib.getRight(),ib.getY());
-                g.strokePath(p,juce::PathStrokeType(1.8f)); break;
-        case 2: g.fillEllipse(ib.getX(),cy-5,7,7); g.fillEllipse(ib.getX(),cy+1,7,7);
-                g.drawLine(ib.getX()+8,cy-1,ib.getRight(),cy-1,1.5f);
-                g.drawLine(ib.getX()+8,cy+4,ib.getRight(),cy+4,1.5f); break;
-        case 3: g.drawRoundedRectangle(ib,2.f,1.8f);
-                g.drawLine(ib.getX(),ib.getY()+5,ib.getRight(),ib.getY()+5,1.f);
-                g.fillEllipse(cx-4,cy-3,8,8); break;
-        case 4: g.drawRoundedRectangle(ib.reduced(0,1),3.f,1.8f);
-                g.drawEllipse(cx-5,cy-4,10,10,1.5f); g.drawEllipse(cx-2,cy-1,5,5,1.f); break;
-        case 5: { float pos[]={.4f,.7f,.25f};
-                for(int f=0;f<3;++f){ float fx=ib.getX()+f*(ib.getWidth()/2.5f);
-                    g.drawLine(fx,ib.getY(),fx,ib.getBottom(),1.2f);
-                    g.fillEllipse(fx-2.5f,ib.getY()+pos[f]*ib.getHeight()-2.5f,5,5); } break; }
-        case 6: g.drawEllipse(ib.reduced(1),1.8f);
-                g.drawLine(cx,cy,cx,ib.getY()+5,1.8f); g.drawLine(cx,cy,cx+5,cy+4,1.8f); break;
-        case 7: for(int w=0;w<2;++w){ float wy=cy-2+w*6.f; p.clear();
-                p.startNewSubPath(ib.getX(),wy);
-                p.cubicTo(ib.getX()+5,wy-4,ib.getX()+10,wy+4,cx,wy);
-                p.cubicTo(cx+5,wy-4,ib.getRight()-5,wy+4,ib.getRight(),wy);
-                g.strokePath(p,juce::PathStrokeType(1.4f-w*.3f)); } break;
+        case 0: // GATE — slash line
+            g.drawLine(ib.getX(),ib.getBottom(),ib.getRight(),ib.getY(),2.f); break;
+        case 1: // COMP — compression curve
+            p.startNewSubPath(ib.getX(),ib.getBottom()); p.lineTo(cx,cy+3);
+            p.cubicTo(cx,cy+3,cx,cy-3,ib.getRight(),ib.getY());
+            g.strokePath(p,juce::PathStrokeType(1.8f)); break;
+        case 2: // DRIVE — pedal shape
+            g.fillEllipse(ib.getX(),cy-5,7,7); g.fillEllipse(ib.getX(),cy+1,7,7);
+            g.drawLine(ib.getX()+8,cy-1,ib.getRight(),cy-1,1.5f);
+            g.drawLine(ib.getX()+8,cy+4,ib.getRight(),cy+4,1.5f); break;
+        case 3: // AMP — amp head
+            g.drawRoundedRectangle(ib,2.f,1.8f);
+            g.drawLine(ib.getX(),ib.getY()+5,ib.getRight(),ib.getY()+5,1.f);
+            g.fillEllipse(cx-4,cy-3,8,8); break;
+        case 4: // CAB — speaker
+            g.drawRoundedRectangle(ib.reduced(0,1),3.f,1.8f);
+            g.drawEllipse(cx-5,cy-4,10,10,1.5f); g.drawEllipse(cx-2,cy-1,5,5,1.f); break;
+        case 5: // EQ — faders
+            { float pos[]={.4f,.7f,.25f};
+            for(int f=0;f<3;++f){ float fx=ib.getX()+f*(ib.getWidth()/2.5f);
+                g.drawLine(fx,ib.getY(),fx,ib.getBottom(),1.2f);
+                g.fillEllipse(fx-2.5f,ib.getY()+pos[f]*ib.getHeight()-2.5f,5,5); } break; }
+        case 6: // MOD — sine wave
+            p.startNewSubPath(ib.getX(), cy);
+            p.cubicTo(ib.getX()+6,cy-7, ib.getX()+12,cy+7, cx,cy);
+            p.cubicTo(cx+6,cy-7, ib.getRight()-5,cy+7, ib.getRight(),cy);
+            g.strokePath(p,juce::PathStrokeType(1.8f)); break;
+        case 7: // DELAY — clock
+            g.drawEllipse(ib.reduced(1),1.8f);
+            g.drawLine(cx,cy,cx,ib.getY()+5,1.8f); g.drawLine(cx,cy,cx+5,cy+4,1.8f); break;
+        case 8: // REVERB — ripples
+            for(int wave=0;wave<2;++wave){ float wy=cy-2+wave*7.f; p.clear();
+            p.startNewSubPath(ib.getX(),wy);
+            p.cubicTo(ib.getX()+5,wy-4,ib.getX()+10,wy+4,cx,wy);
+            p.cubicTo(cx+5,wy-4,ib.getRight()-5,wy+4,ib.getRight(),wy);
+            g.strokePath(p,juce::PathStrokeType(1.4f-wave*.3f)); } break;
     }
+
     // Label
     g.setFont(juce::Font(8.f,juce::Font::bold));
-    g.setColour(active?kPurple:kMuted);
+    g.setColour(active ? kPurple : kMuted);
     g.drawText(kChainLabels[idx],
                juce::Rectangle<int>(b.getX()-4,b.getBottom()+2,b.getWidth()+8,12),
                juce::Justification::centred);
@@ -649,7 +720,8 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
     int fxY=kTopH+kStripH+kAmpH;
     int footY=H-kFootH;
     int cabH=footY-fxY;
-    int cX=W-320-4;
+    int cabW=320;
+    int cX=W-cabW-4;
 
     // Cabinet card background
     g.setColour(kCard); g.fillRoundedRectangle((float)cX,(float)(fxY+4),316.f,(float)(cabH-8),8.f);
@@ -676,29 +748,37 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(juce::Colour(0xff3a3a5a));
     g.drawText("ARCANE", phX, phY+phH-18, phW, 14, juce::Justification::centred);
 
-    // Fields
+    // Fields — no distance slider
     int rx=cX+132, ry=fxY+38;
-    g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("CABINET",  rx, ry,   90, 12, juce::Justification::centredLeft);
-    g.drawText("DISTANCE", rx, ry+46, 90, 12, juce::Justification::centredLeft);
-    g.setFont(juce::Font(10.f)); g.setColour(kText);
-    g.drawText(juce::String(sliderDist.getValue(),1)+" cm", cX+280, ry+46, 36, 12, juce::Justification::centredRight);
 
-    // Model/IR status
-    int nameY=ry+74;
+    // MODEL section
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("MODEL", rx, nameY, 50, 12, juce::Justification::centredLeft);
+    g.drawText("MODEL", rx, ry, 50, 12, juce::Justification::centredLeft);
     g.setFont(juce::Font(10.f));
-    g.setColour(proc.isNAMLoaded()?kText:kMuted.withAlpha(.5f));
-    g.drawFittedText(proc.isNAMLoaded()?proc.getLoadedNAMName():"No model loaded",
-                     rx, nameY+13, 170, 13, juce::Justification::centredLeft, 1);
+    g.setColour(proc.isNAMLoaded() ? kText : kMuted.withAlpha(.5f));
+    g.drawFittedText(proc.isNAMLoaded() ? proc.getLoadedNAMName() : "No model loaded",
+                     rx, ry+14, 148, 13, juce::Justification::centredLeft, 1);
+    // X clear model — only shown when loaded
+    if (proc.isNAMLoaded()) {
+        g.setFont(juce::Font(12.f, juce::Font::bold));
+        g.setColour(kMuted.brighter(.3f));
+        g.drawText("x", cX+cabW-26, ry+11, 18, 18, juce::Justification::centred);
+    }
 
+    // IR section
+    int irY = ry+38;
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("IR", rx, nameY+30, 30, 12, juce::Justification::centredLeft);
+    g.drawText("IR", rx, irY, 30, 12, juce::Justification::centredLeft);
     g.setFont(juce::Font(10.f));
-    g.setColour(proc.isIRLoaded()?kText:kMuted.withAlpha(.5f));
-    g.drawFittedText(proc.isIRLoaded()?proc.getLoadedIRName():"No IR loaded",
-                     rx, nameY+43, 170, 13, juce::Justification::centredLeft, 1);
+    g.setColour(proc.isIRLoaded() ? kText : kMuted.withAlpha(.5f));
+    g.drawFittedText(proc.isIRLoaded() ? proc.getLoadedIRName() : "No IR loaded",
+                     rx, irY+14, 148, 13, juce::Justification::centredLeft, 1);
+    // X clear IR — only shown when loaded
+    if (proc.isIRLoaded()) {
+        g.setFont(juce::Font(12.f, juce::Font::bold));
+        g.setColour(kMuted.brighter(.3f));
+        g.drawText("x", cX+cabW-26, irY+11, 18, 18, juce::Justification::centred);
+    }
 }
 
 void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
