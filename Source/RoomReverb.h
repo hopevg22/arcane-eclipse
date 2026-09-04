@@ -88,8 +88,8 @@ public:
         float rt60 = 0.15f + decay * 3.85f;             // 0.15s .. 4.0s
         float dampCoeff = juce::jmap (tone, 0.0f, 1.0f, 0.85f, 0.15f); // dark->bright
         float apGain = juce::jmap (diffusion, 0.0f, 1.0f, 0.2f, 0.7f);
-        float modDepthSamples = modDepth * 6.0f;         // up to 6 samples of wobble
-        float modRateHz = 0.3f;
+        float modDepthSamples = modDepth * 0.5f;  // was 6.0f — reduced to eliminate synthetic wobble
+        float modRateHz = 0.15f;                   // was 0.3f — slower and subtler
 
         preDelay.setDelay ((float) (preDelayMsParam * 0.001 * sampleRate));
 

@@ -94,7 +94,7 @@ private:
 
     juce::LagrangeInterpolator resamplerIn, resamplerOut;
     double currentSampleRate = 44100.0;
-    std::vector<float> resampleBufIn, resampleBufOut;
+    std::vector<float> resampleBufIn, resampleBufOut, monoBuf, namOutBuf;
 
     juce::dsp::Convolution convolution;
     OpticalCompressor compressor;

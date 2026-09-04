@@ -70,8 +70,10 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     currentSampleRate = sampleRate;
     juce::dsp::ProcessSpec spec{ sampleRate, (juce::uint32)samplesPerBlock, 2 };
     convolution.prepare(spec); convolution.reset();
-    resampleBufIn.resize((size_t)(samplesPerBlock*2+64), 0.f);
-    resampleBufOut.resize((size_t)(samplesPerBlock*2+64), 0.f);
+    resampleBufIn .assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+    resampleBufOut.assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+    monoBuf       .assign((size_t)(samplesPerBlock + 32),     0.f);
+    namOutBuf     .assign((size_t)(samplesPerBlock + 32),     0.f);
     resamplerIn.reset(); resamplerOut.reset();
     compressor.prepare(sampleRate, samplesPerBlock);
     overdrive.prepare(sampleRate, samplesPerBlock);
@@ -152,25 +154,49 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 6. NAM MODEL — the amp simulation
     if (namModel != nullptr) {
-        const double namSR = 48000.0;
-        double ratio = namSR / currentSampleRate;
-        int namSamples = (int)std::ceil(numSamples * ratio) + 4;
-        if ((int)resampleBufIn.size()  < namSamples+4) resampleBufIn .resize((size_t)namSamples+16);
-        if ((int)resampleBufOut.size() < namSamples+4) resampleBufOut.resize((size_t)namSamples+16);
-        std::vector<float> mono((size_t)numSamples);
+        const double namSR  = 48000.0;
+        const double ratioUp   = namSR / currentSampleRate;   // host -> NAM
+        const double ratioDown = currentSampleRate / namSR;   // NAM  -> host
+
+        // Pre-allocate buffers — no heap alloc inside the loop
+        int namSamples = (int)std::ceil(numSamples * ratioUp) + 8;
+        if ((int)resampleBufIn.size()  < namSamples + 16)
+            resampleBufIn.assign((size_t)(namSamples + 32), 0.f);
+        if ((int)resampleBufOut.size() < namSamples + 16)
+            resampleBufOut.assign((size_t)(namSamples + 32), 0.f);
+        if ((int)monoBuf.size() < numSamples + 16)
+            monoBuf.assign((size_t)(numSamples + 32), 0.f);
+        if ((int)namOutBuf.size() < numSamples + 16)
+            namOutBuf.assign((size_t)(numSamples + 32), 0.f);
+
+        // Mix to mono
         auto* L = buffer.getReadPointer(0);
-        for (int n = 0; n < numSamples; ++n) {
-            mono[(size_t)n] = numCh > 1 ? .5f*(L[n]+buffer.getReadPointer(1)[n]) : L[n];
-        }
-        int actualNam = resamplerIn.process(ratio, mono.data(), resampleBufIn.data(), namSamples, numSamples, 0);
-        namModel->Process(resampleBufIn.data(), resampleBufOut.data(), (size_t)actualNam);
-        std::vector<float> namOut((size_t)numSamples+8);
-        int actualOut = juce::jmin(resamplerOut.process(currentSampleRate/namSR,
-                        resampleBufOut.data(), namOut.data(), numSamples, actualNam, 0), numSamples);
+        for (int n = 0; n < numSamples; ++n)
+            monoBuf[(size_t)n] = numCh > 1 ? .5f*(L[n]+buffer.getReadPointer(1)[n]) : L[n];
+
+        // Upsample to 48 kHz
+        int actualUp = resamplerIn.process(ratioUp,
+                           monoBuf.data(), resampleBufIn.data(),
+                           namSamples, numSamples, 0);
+        actualUp = juce::jlimit(1, namSamples, actualUp);
+
+        // Zero pad output buffer before NAM writes to it
+        std::fill(resampleBufOut.begin(), resampleBufOut.begin() + actualUp, 0.f);
+
+        // NAM inference at 48 kHz
+        namModel->Process(resampleBufIn.data(), resampleBufOut.data(), (size_t)actualUp);
+
+        // Downsample back to host rate — pass actualUp as input count
+        int actualDown = resamplerOut.process(ratioDown,
+                             resampleBufOut.data(), namOutBuf.data(),
+                             numSamples, actualUp, 0);
+        actualDown = juce::jlimit(0, numSamples, actualDown);
+
+        // Write to all output channels
         for (int ch = 0; ch < numCh; ++ch) {
             auto* dst = buffer.getWritePointer(ch);
-            for (int n = 0; n < actualOut;    ++n) dst[n] = namOut[(size_t)n];
-            for (int n = actualOut; n < numSamples; ++n) dst[n] = 0.f;
+            for (int n = 0; n < actualDown;    ++n) dst[n] = namOutBuf[(size_t)n];
+            for (int n = actualDown; n < numSamples; ++n) dst[n] = 0.f;
         }
     }
 
@@ -239,6 +265,10 @@ bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file)
         std::unique_ptr<NeuralAudio::NeuralModel> model(raw);
         { const juce::ScopedLock lock(getCallbackLock()); namModel = std::move(model); loadedNAMName = file.getFileNameWithoutExtension(); }
         resamplerIn.reset(); resamplerOut.reset();
+        std::fill(resampleBufIn.begin(),  resampleBufIn.end(),  0.f);
+        std::fill(resampleBufOut.begin(), resampleBufOut.end(), 0.f);
+        std::fill(monoBuf.begin(),        monoBuf.end(),        0.f);
+        std::fill(namOutBuf.begin(),      namOutBuf.end(),      0.f);
         return true;
     } catch(...) { namModel = nullptr; loadedNAMName = "(failed)"; return false; }
 }

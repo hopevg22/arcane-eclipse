@@ -53,8 +53,8 @@ public:
                         (baseDelay + (float)(lfoDepth * modDepth * lfo));
                     delaySamples = juce::jlimit(0.f, 4094.f, delaySamples);
 
-                    delayLine[ch].pushSample(ch, dry);
-                    wet = delayLine[ch].popSample(ch, delaySamples, true);
+                    delayLine[ch].pushSample(0, dry);
+                    wet = delayLine[ch].popSample(0, delaySamples, true);
                 }
 
                 data[n] = dry + wetMix * (wet - dry);
