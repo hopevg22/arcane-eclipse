@@ -37,3 +37,4 @@ native rate) and back, so it works correctly at any DAW sample rate.
 
 - JUCE 8.0.12
 - NeuralAudio (mikeoliphant) — included as a subfolder with its own submodules
+ 
