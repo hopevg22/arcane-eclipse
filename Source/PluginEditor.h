@@ -2,145 +2,151 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 
-// ── Colours ───────────────────────────────────────────────────────────────────
-namespace AEC {
-    static const juce::Colour Bg      { 0xff0d0d12 };
-    static const juce::Colour Surface { 0xff13131a };
-    static const juce::Colour Card    { 0xff1a1a24 };
-    static const juce::Colour CardBd  { 0xff2a2a3e };
-    static const juce::Colour Purple  { 0xff8B5CF6 };
-    static const juce::Colour PurDim  { 0xff6D45D4 };
-    static const juce::Colour PurGlow { 0x338B5CF6 };
+// ── Palette ──────────────────────────────────────────────────────────────────
+namespace AEP {
+    static const juce::Colour Bg      { 0xff141418 };
+    static const juce::Colour Surface { 0xff1c1c22 };
+    static const juce::Colour Card    { 0xff1e1e26 };
+    static const juce::Colour CardBd  { 0xff2e2e3e };
+    static const juce::Colour Purple  { 0xff9B59FF };
+    static const juce::Colour PurDim  { 0xff7040cc };
     static const juce::Colour Text    { 0xfff0f0ff };
     static const juce::Colour Muted   { 0xff7878aa };
-    static const juce::Colour Strip   { 0xff0f0f18 };
+    static const juce::Colour Green   { 0xff44cc88 };
+    static const juce::Colour Red     { 0xffcc4444 };
 }
 
 // ── LookAndFeel ───────────────────────────────────────────────────────────────
-class ArcLAF : public juce::LookAndFeel_V4
+class AELAF : public juce::LookAndFeel_V4
 {
 public:
-    ArcLAF();
-    void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h,
-                          float pos, float startA, float endA, juce::Slider&) override;
-    void drawLabel(juce::Graphics&, juce::Label&) override;
-    void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool, bool) override;
-    void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
-    void drawComboBox(juce::Graphics&, int w, int h, bool, int, int, int, int, juce::ComboBox&) override;
-    void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
-    void drawPopupMenuItem(juce::Graphics&, const juce::Rectangle<int>&,
-                           bool, bool, bool, bool, bool,
-                           const juce::String&, const juce::String&,
-                           const juce::Drawable*, const juce::Colour*) override;
-    juce::Font getComboBoxFont(juce::ComboBox&) override { return juce::Font(11.f); }
+    AELAF();
+    void drawRotarySlider(juce::Graphics&,int,int,int,int,
+                          float,float,float,juce::Slider&) override;
+    void drawLabel(juce::Graphics&,juce::Label&) override;
+    void drawButtonBackground(juce::Graphics&,juce::Button&,
+                              const juce::Colour&,bool,bool) override;
+    void drawToggleButton(juce::Graphics&,juce::ToggleButton&,bool,bool) override {}
+    void drawComboBox(juce::Graphics&,int,int,bool,int,int,int,int,juce::ComboBox&) override;
+    void positionComboBoxText(juce::ComboBox&,juce::Label&) override;
+    void drawPopupMenuItem(juce::Graphics&,const juce::Rectangle<int>&,
+                           bool,bool,bool,bool,bool,const juce::String&,
+                           const juce::String&,const juce::Drawable*,
+                           const juce::Colour*) override;
 };
 
 // ── Knob widget ───────────────────────────────────────────────────────────────
-struct AKnob {
-    juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+struct AEKnob {
+    juce::Slider slider{juce::Slider::RotaryHorizontalVerticalDrag,juce::Slider::NoTextBox};
     juce::Label  nameLabel, valLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
-
-    void setup(juce::Component*, juce::AudioProcessorValueTreeState&,
-               const juce::String& paramId, const juce::String& name, ArcLAF*);
-    void place(int cx, int cy, int sz); // sz = diameter
+    void setup(juce::Component*,juce::AudioProcessorValueTreeState&,
+               const juce::String& id,const juce::String& name,AELAF*);
+    void place(int cx,int cy,int sz,bool showVal=true);
 };
 
-// ── Stomp button ──────────────────────────────────────────────────────────────
-class StompButton : public juce::ToggleButton
+// ── Scene data ────────────────────────────────────────────────────────────────
+struct SceneData {
+    juce::String namPath, irPath, name{"Empty"};
+    juce::ValueTree params;
+    bool isEmpty() const { return name == "Empty"; }
+};
+
+// ── Tuner panel ───────────────────────────────────────────────────────────────
+class TunerPanel : public juce::Component, private juce::Timer
 {
 public:
-    StompButton() : juce::ToggleButton("") {}
-    void paint(juce::Graphics& g) override;
+    TunerPanel();
+    void setInputBuffer(const float* data, int numSamples, double sr);
+    void paint(juce::Graphics&) override;
+private:
+    void timerCallback() override;
+    float detectedHz = 0.f;
+    juce::String noteName;
+    float cents = 0.f;
+    std::vector<float> buffer;
+    double sampleRate = 44100.0;
+    float detectPitch();
 };
 
 // ── Main editor ───────────────────────────────────────────────────────────────
-class ArcaneEclipseEditor : public juce::AudioProcessorEditor, private juce::Timer
+class ArcaneEclipseEditor : public juce::AudioProcessorEditor,
+                             private juce::Timer
 {
 public:
     explicit ArcaneEclipseEditor(ArcaneEclipseProcessor&);
     ~ArcaneEclipseEditor() override;
     void paint(juce::Graphics&) override;
+    void paintOverChildren(juce::Graphics&) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
-
-    // ── paint sections ────────────────────────────────────────────────────────
-    void paintKnobImages(juce::Graphics&);
     void paintTopBar(juce::Graphics&);
     void paintStrip(juce::Graphics&);
     void paintChain(juce::Graphics&);
+    void paintChainNode(juce::Graphics&,int,juce::Rectangle<int>,bool);
     void paintAmpHead(juce::Graphics&);
     void paintFXSection(juce::Graphics&);
     void paintCabSection(juce::Graphics&);
+    void paintSceneBar(juce::Graphics&);
     void paintFooter(juce::Graphics&);
-    void paintVU(juce::Graphics&, juce::Rectangle<float>, float lvl);
-    void paintChainNode(juce::Graphics&, int idx, juce::Rectangle<int>, bool active);
-
+    void paintVU(juce::Graphics&,juce::Rectangle<float>,float);
+    void paintTuner(juce::Graphics&);
     juce::Rectangle<int> chainNodeBounds(int i) const;
 
-    // ── layout constants ──────────────────────────────────────────────────────
-    static constexpr int W = 1100, H = 680;
-    static constexpr int kTopH   = 50;
-    static constexpr int kStripH = 120;
-    static constexpr int kAmpH   = 210;
-    static constexpr int kFXH    = 230;
-    static constexpr int kFootH  = 36;
-    // kCabH fills remaining space
+    void saveScene(int slot);
+    void loadScene(int slot);
+
+    // ── Layout ────────────────────────────────────────────────────────────────
+    static constexpr int W=1200,H=680;
+    static constexpr int kTopH=48,kStripH=118,kAmpH=196,kFXH=196,kSceneH=52,kFootH=36;
+    static constexpr int kCabW=300;
 
     ArcaneEclipseProcessor& proc;
-    ArcLAF laf;
-    int activeNode = 3;
-    float vuIn = 0.f, vuOut = 0.f;
+    AELAF laf;
+    float vuIn=0.f,vuOut=0.f;
+    bool tunerVisible=false;
+    float tunerHz=0.f;
+    juce::String tunerNote;
+    float tunerCents=0.f;
+    int activeScene=-1;
+    SceneData scenes[5];
 
     // Strip knobs
-    AKnob kInput, kGate, kComp, kOutput;
-
+    AEKnob kInput,kGate,kComp,kOutput;
     // Amp knobs
-    AKnob kGain, kBass, kMid, kTreble, kPresence, kMaster;
+    AEKnob kGain,kBass,kMid,kTreble,kPresence,kMaster;
+    // FX knobs
+    AEKnob kODDrive,kODTone,kODLevel;
+    AEKnob kModRate,kModDepth,kModMix;
+    AEKnob kDTime,kDFeedback,kDMix;
+    AEKnob kRDecay,kRSize,kRMix;
 
-    // OD knobs
-    AKnob kODDrive, kODTone, kODLevel;
-    // Mod knobs
-    AKnob kModRate, kModDepth, kModMix;
-    // Delay knobs
-    AKnob kDTime, kDFeedback, kDMix;
-    // Reverb knobs
-    AKnob kRDecay, kRSize, kRMix;
-
-    // Stomps
-    StompButton stompOD, stompMod, stompDelay, stompReverb;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
-        attOD, attMod, attDelay, attReverb, attCab;
-    juce::ToggleButton tbCab{""};
-
-    // Gate and Comp toggles in strip
+    // Toggles
     juce::ToggleButton tbGate{""}, tbComp{""};
+    juce::ToggleButton stompOD{""}, stompMod{""}, stompDelay{""}, stompReverb{""};
+    juce::ToggleButton tbCab{""}, tbTuner{""};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
-        attGate, attComp2;
-
-    // X clear buttons for model and IR
-    juce::TextButton btnClearModel{"x"}, btnClearIR{"x"};
+        attGate,attComp,attOD,attMod,attDelay,attReverb,attCab;
 
     // Dropdowns
-    juce::ComboBox comboModType, comboDelayType, comboReverbType, comboCab;
+    juce::ComboBox comboMod,comboDly,comboRvb;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
-        attModType, attDelayType, attReverbType;
+        attModType,attDlyType,attRvbType;
 
-    // Buttons
-    juce::TextButton btnLoadModel{"LOAD MODEL"}, btnLoadIR{"LOAD IR"}, btnBrowse{"BROWSE"};
-    juce::Slider sliderDist { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    // Load buttons
+    juce::TextButton btnLoadModel{"LOAD MODEL"},btnLoadIR{"LOAD IR"};
+    juce::TextButton btnClearModel{"×"},btnClearIR{"×"};
 
-    // Cab tabs
-    juce::TextButton tabCab{"CABINET"}, tabIR{"IR LOADER"};
-    int activeCabTab = 0;
+    // Scene buttons (5 footswitches)
+    juce::TextButton sceneBtn[5];
+    juce::TextButton sceneSave[5];
 
-    std::unique_ptr<juce::FileChooser> chooserModel, chooserIR;
+    // Tuner toggle button
+    juce::TextButton btnTuner{"TUNER"};
 
+    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR;
     static const juce::String kChainLabels[9];
-    juce::Image chainIcons[9];
-    juce::Image knobStrip, knobAmp, knobFX, bgImage;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseEditor)
 };
