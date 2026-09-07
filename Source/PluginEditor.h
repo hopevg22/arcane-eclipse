@@ -97,11 +97,12 @@ private:
 
     void saveScene(int slot);
     void loadScene(int slot);
+    void refreshSceneButtons();
 
     // ── Layout ────────────────────────────────────────────────────────────────
-    static constexpr int W=1200,H=680;
-    static constexpr int kTopH=48,kStripH=118,kAmpH=196,kFXH=196,kSceneH=52,kFootH=36;
-    static constexpr int kCabW=300;
+    static constexpr int W=1200,H=823;
+    static constexpr int kTopH=54,kStripH=124,kAmpH=285,kFXH=258,kSceneH=58,kFootH=44;
+    static constexpr int kCabW=346;
 
     ArcaneEclipseProcessor& proc;
     AELAF laf;
@@ -110,8 +111,8 @@ private:
     float tunerHz=0.f;
     juce::String tunerNote;
     float tunerCents=0.f;
-    int activeScene=-1;
-    SceneData scenes[5];
+    int activeScene=-1; int currentBank=0;
+    SceneData scenes[20];
 
     // Strip knobs
     AEKnob kInput,kGate,kComp,kOutput;
@@ -139,9 +140,12 @@ private:
     juce::TextButton btnLoadModel{"LOAD MODEL"},btnLoadIR{"LOAD IR"};
     juce::TextButton btnClearModel{"×"},btnClearIR{"×"};
 
-    // Scene buttons (5 footswitches)
-    juce::TextButton sceneBtn[5];
-    juce::TextButton sceneSave[5];
+    // Scene bar (4 slots + 2 bank buttons)
+    juce::TextButton sceneBtn[4];
+    juce::TextButton bankPrev, bankNext;
+    // Header preset nav + save
+    juce::ToggleButton presetPrev, presetNext;
+    juce::TextButton headerSave{"SAVE"};
 
     // Tuner toggle button
     juce::TextButton btnTuner{"TUNER"};

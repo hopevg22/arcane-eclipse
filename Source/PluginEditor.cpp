@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include <BinaryData.h>
+#include <cmath>
 
 static const juce::Colour kPurple{0xff9B59FF};
 static const juce::Colour kPurDim{0xff7040cc};
@@ -8,12 +9,24 @@ static const juce::Colour kSurf  {0xff1c1c22};
 static const juce::Colour kCard  {0xff1e1e26};
 static const juce::Colour kCardBd{0xff2e2e3e};
 static const juce::Colour kText  {0xfff0f0ff};
-static const juce::Colour kMuted {0xff7878aa};
+static const juce::Colour kMuted {0xffbcbce2};
 static const juce::Colour kGreen {0xff44cc88};
 static const juce::Colour kRed   {0xffcc4444};
 
 const juce::String ArcaneEclipseEditor::kChainLabels[9]=
     {"GATE","COMP","DRIVE","AMP","CAB","EQ","MOD","DELAY","REVERB"};
+
+// Dark-outlined text so labels read on the busy background and dark art
+static void haloText(juce::Graphics& g,const juce::String& s,juce::Font f,
+                     juce::Colour col,juce::Rectangle<int> r,juce::Justification j)
+{
+    g.setFont(f);
+    g.setColour(juce::Colours::black.withAlpha(0.8f));
+    for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy) if(dx||dy)
+        g.drawText(s,r.translated(dx,dy),j,false);
+    g.setColour(col);
+    g.drawText(s,r,j,false);
+}
 
 // ── AELAF ─────────────────────────────────────────────────────────────────────
 AELAF::AELAF(){
@@ -21,7 +34,7 @@ AELAF::AELAF(){
     setColour(juce::TextButton::textColourOffId,  kText);
     setColour(juce::TextButton::buttonOnColourId, kPurple);
     setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
-    setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff1a1a24));
+    setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff12121a));
     setColour(juce::ComboBox::textColourId,       kText);
     setColour(juce::ComboBox::outlineColourId,    kCardBd);
     setColour(juce::ComboBox::arrowColourId,      kPurple);
@@ -34,56 +47,51 @@ AELAF::AELAF(){
 void AELAF::drawRotarySlider(juce::Graphics& g,int x,int y,int w,int h,
                               float pos,float startA,float endA,juce::Slider&)
 {
-    // Fill component background with card colour to hide JUCE default grey
-    g.setColour(kCard);
-    g.fillRect(x, y, w, h);
+    // Unified knob image, rotated to the value; transparent corners let the art show
+    static juce::Image src = juce::ImageCache::getFromMemory(
+        BinaryData::knob_unified_png, BinaryData::knob_unified_pngSize);
+    static juce::Image knob = src.rescaled(160,160,juce::Graphics::highResamplingQuality);
 
-    auto b=juce::Rectangle<float>((float)x,(float)y,(float)w,(float)h).reduced(4.f);
-    auto c=b.getCentre(); float r=juce::jmin(b.getWidth(),b.getHeight())*.5f;
-    // Track
-    juce::Path track;
-    track.addCentredArc(c.x,c.y,r*.88f,r*.88f,0,startA,endA,true);
-    g.setColour(juce::Colour(0xff252535));
-    g.strokePath(track,juce::PathStrokeType(3.5f,juce::PathStrokeType::curved,
-                                            juce::PathStrokeType::rounded));
-    // Arc
-    if(pos>0.005f){
-        juce::Path arc;
-        arc.addCentredArc(c.x,c.y,r*.88f,r*.88f,0,startA,startA+(endA-startA)*pos,true);
-        g.setColour(kPurple);
-        g.strokePath(arc,juce::PathStrokeType(3.5f,juce::PathStrokeType::curved,
-                                              juce::PathStrokeType::rounded));
-    }
-    // Body
-    juce::ColourGradient kg(juce::Colour(0xff2a2a38),c.x-r*.3f,c.y-r*.3f,
-                             juce::Colour(0xff0e0e16),c.x+r*.4f,c.y+r*.4f,true);
-    g.setGradientFill(kg); g.fillEllipse(c.x-r*.72f,c.y-r*.72f,r*1.44f,r*1.44f);
-    g.setColour(kCardBd); g.drawEllipse(c.x-r*.72f,c.y-r*.72f,r*1.44f,r*1.44f,1.f);
-    // Pointer
+    auto b=juce::Rectangle<float>((float)x,(float)y,(float)w,(float)h);
+    auto c=b.getCentre();
+    float sz=juce::jmin(b.getWidth(),b.getHeight());
     float ang=startA+pos*(endA-startA);
-    float pr=r*.56f;
-    float px=c.x+pr*std::sin(ang),py=c.y-pr*std::cos(ang);
-    g.setColour(kPurple); g.fillEllipse(px-2.5f,py-2.5f,5.f,5.f);
-    g.drawLine(c.x,c.y,px,py,2.f);
+    float s = sz/(float)knob.getWidth();
+    auto tr = juce::AffineTransform::scale(s)
+                .translated(c.x - knob.getWidth()*s*0.5f, c.y - knob.getHeight()*s*0.5f)
+                .rotated(ang, c.x, c.y);
+    g.drawImageTransformed(knob, tr, false);
+
+    // Purple glow at the pointer tip
+    float pr=sz*0.5f*0.85f;
+    float gx=c.x+std::sin(ang)*pr, gy=c.y-std::cos(ang)*pr;
+    g.setColour(kPurple.withAlpha(0.30f)); g.fillEllipse(gx-sz*0.16f,gy-sz*0.16f,sz*0.32f,sz*0.32f);
+    g.setColour(kPurple);                  g.fillEllipse(gx-sz*0.075f,gy-sz*0.075f,sz*0.15f,sz*0.15f);
+    g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(gx-sz*0.035f,gy-sz*0.035f,sz*0.07f,sz*0.07f);
 }
 void AELAF::drawLabel(juce::Graphics& g,juce::Label& l){
+    auto txt=l.getText(); auto f=l.getFont(); auto j=l.getJustificationType();
+    auto r=l.getLocalBounds();
+    g.setFont(f);
+    g.setColour(juce::Colours::black.withAlpha(0.8f));
+    for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy) if(dx||dy)
+        g.drawText(txt,r.translated(dx,dy),j,false);
     g.setColour(l.findColour(juce::Label::textColourId));
-    g.setFont(l.getFont());
-    g.drawFittedText(l.getText(),l.getLocalBounds(),l.getJustificationType(),1);
+    g.drawText(txt,r,j,false);
 }
 void AELAF::drawButtonBackground(juce::Graphics& g,juce::Button& btn,
                                   const juce::Colour&,bool,bool isDown){
     auto b=btn.getLocalBounds().toFloat().reduced(.5f);
     bool on=btn.getToggleState();
-    g.setColour(isDown?kPurple.withAlpha(.3f):(on?kPurple.withAlpha(.18f):
+    g.setColour(isDown?kPurple.withAlpha(.35f):(on?kPurple.withAlpha(.22f):
                 btn.findColour(juce::TextButton::buttonColourId)));
-    g.fillRoundedRectangle(b,5.f);
+    g.fillRoundedRectangle(b,6.f);
     g.setColour(on||isDown?kPurple:kCardBd);
-    g.drawRoundedRectangle(b,5.f,1.f);
+    g.drawRoundedRectangle(b,6.f,on?1.8f:1.f);
 }
 void AELAF::drawComboBox(juce::Graphics& g,int w,int h,bool,
-                          int,int,int,int,juce::ComboBox& cb){
-    g.setColour(juce::Colour(0xff1a1a24));
+                          int,int,int,int,juce::ComboBox&){
+    g.setColour(juce::Colour(0xff12121a));
     g.fillRoundedRectangle(0,0,(float)w,(float)h,4.f);
     g.setColour(kCardBd);
     g.drawRoundedRectangle(.5f,.5f,(float)w-1,(float)h-1,4.f,1.f);
@@ -92,7 +100,7 @@ void AELAF::drawComboBox(juce::Graphics& g,int w,int h,bool,
     g.setColour(kPurple); g.fillPath(arr);
 }
 void AELAF::positionComboBoxText(juce::ComboBox& cb,juce::Label& l){
-    l.setBounds(6,1,cb.getWidth()-20,cb.getHeight()-2);
+    l.setBounds(8,1,cb.getWidth()-22,cb.getHeight()-2);
     l.setFont(juce::Font(10.f));
 }
 void AELAF::drawPopupMenuItem(juce::Graphics& g,const juce::Rectangle<int>& area,
@@ -109,6 +117,8 @@ void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
                     const juce::String& id,const juce::String& nm,AELAF* laf){
     slider.setLookAndFeel(laf);
     slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    slider.setRotaryParameters(juce::MathConstants<float>::pi*1.25f,
+                               juce::MathConstants<float>::pi*2.75f, true);
     slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     slider.setColour(juce::Slider::backgroundColourId, juce::Colours::transparentBlack);
     slider.setColour(juce::Slider::trackColourId, juce::Colours::transparentBlack);
@@ -117,15 +127,17 @@ void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
     att=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(ap,id,slider);
     nameLabel.setText(nm,juce::dontSendNotification);
     nameLabel.setJustificationType(juce::Justification::centred);
-    nameLabel.setFont(juce::Font(8.f,juce::Font::bold));
-    nameLabel.setColour(juce::Label::textColourId,kMuted);
+    nameLabel.setFont(juce::Font(8.5f,juce::Font::bold));
+    nameLabel.setColour(juce::Label::textColourId,juce::Colour(0xffbcbce2));
     nameLabel.setColour(juce::Label::backgroundColourId,juce::Colours::transparentBlack);
+    nameLabel.setInterceptsMouseClicks(false,false);
     nameLabel.setOpaque(false);
     p->addAndMakeVisible(nameLabel);
     valLabel.setJustificationType(juce::Justification::centred);
-    valLabel.setFont(juce::Font(8.f));
-    valLabel.setColour(juce::Label::textColourId,kPurple);
+    valLabel.setFont(juce::Font(9.f));
+    valLabel.setColour(juce::Label::textColourId,juce::Colour(0xffc6a6ff));
     valLabel.setColour(juce::Label::backgroundColourId,juce::Colours::transparentBlack);
+    valLabel.setInterceptsMouseClicks(false,false);
     valLabel.setOpaque(false);
     p->addAndMakeVisible(valLabel);
     slider.onValueChange=[this]{
@@ -134,10 +146,9 @@ void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
     slider.onValueChange();
 }
 void AEKnob::place(int cx,int cy,int sz,bool showVal){
-    // Slider bounds exactly match knob visual size — prevents background bleeding
     slider.setBounds(cx-sz/2, cy-sz/2, sz, sz);
-    nameLabel.setBounds(cx-32, cy+sz/2+2,  64, 12);
-    valLabel .setBounds(cx-24, cy+sz/2+14, 48, 11);
+    nameLabel.setBounds(cx-40, cy+sz/2+6,  80, 13);
+    valLabel .setBounds(cx-32, cy+sz/2+18, 64, 12);
     valLabel.setVisible(showVal);
 }
 
@@ -148,33 +159,29 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     setLookAndFeel(&laf);
     setSize(W,H);
 
-    // Strip
     kInput .setup(this,p.apvts,ArcaneEclipseProcessor::idInputGain, "INPUT", &laf);
     kGate  .setup(this,p.apvts,ArcaneEclipseProcessor::idNoiseGate, "GATE",  &laf);
     kComp  .setup(this,p.apvts,ArcaneEclipseProcessor::idCompThresh,"COMP",  &laf);
     kOutput.setup(this,p.apvts,ArcaneEclipseProcessor::idOutputGain,"OUTPUT",&laf);
-    // Amp
     kGain    .setup(this,p.apvts,ArcaneEclipseProcessor::idAmpGain,    "GAIN",    &laf);
     kBass    .setup(this,p.apvts,ArcaneEclipseProcessor::idAmpBass,    "BASS",    &laf);
     kMid     .setup(this,p.apvts,ArcaneEclipseProcessor::idAmpMid,     "MID",     &laf);
     kTreble  .setup(this,p.apvts,ArcaneEclipseProcessor::idAmpTreble,  "TREBLE",  &laf);
     kPresence.setup(this,p.apvts,ArcaneEclipseProcessor::idAmpPresence,"PRESENCE",&laf);
     kMaster  .setup(this,p.apvts,ArcaneEclipseProcessor::idAmpMaster,  "MASTER",  &laf);
-    // FX
-    kODDrive  .setup(this,p.apvts,ArcaneEclipseProcessor::idODDrive,        "DRIVE",   &laf);
-    kODTone   .setup(this,p.apvts,ArcaneEclipseProcessor::idODTone,         "TONE",    &laf);
-    kODLevel  .setup(this,p.apvts,ArcaneEclipseProcessor::idODLevel,        "LEVEL",   &laf);
-    kModRate  .setup(this,p.apvts,ArcaneEclipseProcessor::idModRate,        "RATE",    &laf);
-    kModDepth .setup(this,p.apvts,ArcaneEclipseProcessor::idModDepth,       "DEPTH",   &laf);
-    kModMix   .setup(this,p.apvts,ArcaneEclipseProcessor::idModMix,         "MIX",     &laf);
-    kDTime    .setup(this,p.apvts,ArcaneEclipseProcessor::idDelayTime,      "TIME",    &laf);
-    kDFeedback.setup(this,p.apvts,ArcaneEclipseProcessor::idDelayFeedback,  "FEEDBACK",&laf);
-    kDMix     .setup(this,p.apvts,ArcaneEclipseProcessor::idDelayMix,       "MIX",     &laf);
-    kRDecay   .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbDecay,    "DECAY",   &laf);
-    kRSize    .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbSize,     "SIZE",    &laf);
-    kRMix     .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbMix,      "MIX",     &laf);
+    kODDrive  .setup(this,p.apvts,ArcaneEclipseProcessor::idODDrive,      "DRIVE",   &laf);
+    kODTone   .setup(this,p.apvts,ArcaneEclipseProcessor::idODTone,       "TONE",    &laf);
+    kODLevel  .setup(this,p.apvts,ArcaneEclipseProcessor::idODLevel,      "LEVEL",   &laf);
+    kModRate  .setup(this,p.apvts,ArcaneEclipseProcessor::idModRate,      "RATE",    &laf);
+    kModDepth .setup(this,p.apvts,ArcaneEclipseProcessor::idModDepth,     "DEPTH",   &laf);
+    kModMix   .setup(this,p.apvts,ArcaneEclipseProcessor::idModMix,       "MIX",     &laf);
+    kDTime    .setup(this,p.apvts,ArcaneEclipseProcessor::idDelayTime,    "TIME",    &laf);
+    kDFeedback.setup(this,p.apvts,ArcaneEclipseProcessor::idDelayFeedback,"FEEDBACK",&laf);
+    kDMix     .setup(this,p.apvts,ArcaneEclipseProcessor::idDelayMix,     "MIX",     &laf);
+    kRDecay   .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbDecay,  "DECAY",   &laf);
+    kRSize    .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbSize,   "SIZE",    &laf);
+    kRMix     .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbMix,    "MIX",     &laf);
 
-    // Toggles — invisible, sit on chain nodes
     for(auto* t:{&tbGate,&tbComp,&stompOD,&stompMod,&stompDelay,&stompReverb,&tbCab})
         addAndMakeVisible(*t);
     attGate  =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idGateOn,   tbGate);
@@ -185,7 +192,6 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     attReverb=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbOn,stompReverb);
     attCab   =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idCabBypass,tbCab);
 
-    // Dropdowns
     comboMod.addItem("Analog Chorus",1); comboMod.addItem("Flanger",2); comboMod.addItem("Tremolo",3);
     comboMod.setSelectedId(1); addAndMakeVisible(comboMod);
     attModType=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts,ArcaneEclipseProcessor::idModType,comboMod);
@@ -196,7 +202,6 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     comboRvb.setSelectedId(1); addAndMakeVisible(comboRvb);
     attRvbType=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbType,comboRvb);
 
-    // Load buttons
     addAndMakeVisible(btnLoadModel);
     btnLoadModel.onClick=[this]{
         chooserModel=std::make_unique<juce::FileChooser>("Load NAM Model",
@@ -220,30 +225,53 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     btnClearIR.onClick=[this]{proc.unloadIR();repaint();};
     addAndMakeVisible(btnClearIR);
 
-    // Scene buttons
-    for(int i=0;i<5;++i){
-        sceneBtn[i].setButtonText("SCENE "+juce::String(i+1));
+    // Scene slots 1-4
+    for(int i=0;i<4;++i){
+        sceneBtn[i].setButtonText(juce::String(i+1));
         sceneBtn[i].setClickingTogglesState(false);
         addAndMakeVisible(sceneBtn[i]);
         sceneBtn[i].onClick=[this,i]{
-            if(juce::ModifierKeys::getCurrentModifiers().isShiftDown())
-                saveScene(i);
-            else
-                loadScene(i);
-            repaint();
+            int idx=currentBank*4+i;
+            if(juce::ModifierKeys::getCurrentModifiers().isShiftDown()) saveScene(idx);
+            else                                                        loadScene(idx);
+            refreshSceneButtons(); repaint();
         };
     }
+    bankPrev.setButtonText("< BANK"); bankNext.setButtonText("BANK >");
+    addAndMakeVisible(bankPrev); addAndMakeVisible(bankNext);
+    bankPrev.onClick=[this]{ currentBank=(currentBank+4)%5; refreshSceneButtons(); repaint(); };
+    bankNext.onClick=[this]{ currentBank=(currentBank+1)%5; refreshSceneButtons(); repaint(); };
 
-    // Tuner button
-    btnTuner.setClickingTogglesState(true);
-    btnTuner.onClick=[this]{tunerVisible=btnTuner.getToggleState();repaint();};
-    addAndMakeVisible(btnTuner);
+    // Header preset nav (invisible over painted arrows) + save
+    presetPrev.setClickingTogglesState(false); presetNext.setClickingTogglesState(false);
+    addAndMakeVisible(presetPrev); addAndMakeVisible(presetNext);
+    auto step=[this](int d){
+        int n=activeScene<0?0:activeScene; n=(n+d+20)%20; loadScene(n);
+        currentBank=n/4; refreshSceneButtons(); repaint();
+    };
+    presetPrev.onClick=[step]{ step(-1); };
+    presetNext.onClick=[step]{ step(+1); };
+    headerSave.setColour(juce::TextButton::buttonColourId,kPurple);
+    headerSave.setColour(juce::TextButton::textColourOffId,juce::Colours::white);
+    addAndMakeVisible(headerSave);
+    headerSave.onClick=[this]{ int idx=activeScene<0?currentBank*4:activeScene; saveScene(idx); refreshSceneButtons(); repaint(); };
 
+    // Tuner toggle sits on the header tuning-fork icon
+    tbTuner.setClickingTogglesState(true);
+    tbTuner.onClick=[this]{ tunerVisible=tbTuner.getToggleState(); repaint(); };
+    addAndMakeVisible(tbTuner);
+
+    refreshSceneButtons();
     startTimerHz(15);
 }
 
 ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);}
 void ArcaneEclipseEditor::timerCallback(){vuIn*=.92f;vuOut*=.92f;repaint();}
+
+void ArcaneEclipseEditor::refreshSceneButtons(){
+    for(int i=0;i<4;++i)
+        sceneBtn[i].setToggleState(activeScene==currentBank*4+i,juce::dontSendNotification);
+}
 
 // ── Scene save/load ───────────────────────────────────────────────────────────
 void ArcaneEclipseEditor::saveScene(int slot){
@@ -251,7 +279,6 @@ void ArcaneEclipseEditor::saveScene(int slot){
     scenes[slot].irPath  = proc.isIRLoaded() ?proc.getLoadedIRName() :"";
     scenes[slot].params  = proc.apvts.copyState();
     scenes[slot].name    = "Scene "+juce::String(slot+1);
-    sceneBtn[slot].setButtonText(scenes[slot].name.substring(0,8));
     activeScene=slot;
 }
 void ArcaneEclipseEditor::loadScene(int slot){
@@ -274,82 +301,76 @@ juce::Rectangle<int> ArcaneEclipseEditor::chainNodeBounds(int i) const
 
 void ArcaneEclipseEditor::resized()
 {
-    int stripY=kTopH, ampY=kTopH+kStripH, fxY=ampY+kAmpH;
-    int sceneY=fxY+kFXH, footY=sceneY+kSceneH;
+    int stripY=kTopH, ampY=kTopH+kStripH, fxY=ampY+kAmpH, sceneY=fxY+kFXH;
 
     // Strip knobs
-    int kSz=56;
-    kInput .place(66, stripY+59,kSz);
-    kGate  .place(138,stripY+59,kSz);
-    kComp  .place(W-138,stripY+59,kSz);
-    kOutput.place(W-66, stripY+59,kSz);
+    int sSz=52, sCy=stripY+kStripH/2;
+    kInput .place(66,   sCy,sSz);
+    kGate  .place(138,  sCy,sSz);
+    kComp  .place(W-138,sCy,sSz);
+    kOutput.place(W-66, sCy,sSz);
 
-    // Chain node toggles — invisible buttons on nodes
+    // Chain node toggles (invisible, over painted nodes)
     for(int i=0;i<9;++i){
         auto nb=chainNodeBounds(i);
-        if(i==0) tbGate .setBounds(nb);
-        else if(i==1) tbComp .setBounds(nb);
-        else if(i==2) stompOD.setBounds(nb);
-        else if(i==6) stompMod.setBounds(nb);
-        else if(i==7) stompDelay.setBounds(nb);
-        else if(i==8) stompReverb.setBounds(nb);
+        if(i==0) tbGate.setBounds(nb); else if(i==1) tbComp.setBounds(nb);
+        else if(i==2) stompOD.setBounds(nb); else if(i==6) stompMod.setBounds(nb);
+        else if(i==7) stompDelay.setBounds(nb); else if(i==8) stompReverb.setBounds(nb);
     }
 
-    // Amp knobs
-    int aSz=72, aCy=ampY+kAmpH*3/4;
-    int aSpan=W-240; int aStep=aSpan/6;
+    // Amp knobs on the brushed faceplate (below the purple divider ~0.571)
+    int aSz=72;
+    int faceTop=ampY+(int)(kAmpH*0.571f);
+    int aCy=faceTop+(int)((fxY-faceTop)*0.42f);
     for(int i=0;i<6;++i){
         AEKnob* ks[]={&kGain,&kBass,&kMid,&kTreble,&kPresence,&kMaster};
-        ks[i]->place(120+aStep/2+i*aStep,aCy,aSz,true);
+        ks[i]->place(150+i*180,aCy,aSz,true);
     }
 
-    // FX cards — 4 cards + cab panel
-    int nCards=4, cabW=kCabW;
-    int fxArea=W-cabW-8;
-    int cardW=fxArea/nCards-5;
-    int fxKSz=46, fxTopCy=fxY+64, fxBotCy=fxY+128;
+    // FX cards
+    int cardW=196, step=208, fxSz=48;
+    int topCy=fxY+(int)(kFXH*0.28f), botCy=fxY+(int)(kFXH*0.61f);
+    int comboY=fxY+(int)(kFXH*0.83f);
+    int odX=10, modX=10+step, dlX=10+2*step, rvX=10+3*step;
+    kODDrive.place(odX+(int)(cardW*0.28f),topCy,fxSz,true);
+    kODTone .place(odX+(int)(cardW*0.72f),topCy,fxSz,true);
+    kODLevel.place(odX+cardW/2,           botCy,fxSz,true);
+    kModRate .place(modX+(int)(cardW*0.28f),topCy,fxSz,true);
+    kModDepth.place(modX+(int)(cardW*0.72f),topCy,fxSz,true);
+    kModMix  .place(modX+cardW/2,           botCy,fxSz,true);
+    comboMod.setBounds(modX+10,comboY,cardW-20,24);
+    kDTime    .place(dlX+(int)(cardW*0.28f),topCy,fxSz,true);
+    kDFeedback.place(dlX+(int)(cardW*0.72f),topCy,fxSz,true);
+    kDMix     .place(dlX+cardW/2,           botCy,fxSz,true);
+    comboDly.setBounds(dlX+10,comboY,cardW-20,24);
+    kRDecay.place(rvX+(int)(cardW*0.28f),topCy,fxSz,true);
+    kRSize .place(rvX+(int)(cardW*0.72f),topCy,fxSz,true);
+    kRMix  .place(rvX+cardW/2,           botCy,fxSz,true);
+    comboRvb.setBounds(rvX+10,comboY,cardW-20,24);
 
-    // OD
-    int odX=4;
-    kODDrive.place(odX+cardW/4,  fxTopCy,fxKSz,false);
-    kODTone .place(odX+cardW*3/4,fxTopCy,fxKSz,false);
-    kODLevel.place(odX+cardW/2,  fxBotCy,fxKSz,false);
-    // MOD
-    int modX=odX+cardW+5;
-    kModRate .place(modX+cardW/4,  fxTopCy,fxKSz,false);
-    kModDepth.place(modX+cardW*3/4,fxTopCy,fxKSz,false);
-    kModMix  .place(modX+cardW/2,  fxBotCy,fxKSz,false);
-    comboMod.setBounds(modX+4,fxY+kFXH-28,cardW-8,22);
-    // DELAY
-    int dlX=modX+cardW+5;
-    kDTime    .place(dlX+cardW/4,  fxTopCy,fxKSz,false);
-    kDFeedback.place(dlX+cardW*3/4,fxTopCy,fxKSz,false);
-    kDMix     .place(dlX+cardW/2,  fxBotCy,fxKSz,false);
-    comboDly.setBounds(dlX+4,fxY+kFXH-28,cardW-8,22);
-    // REVERB
-    int rvX=dlX+cardW+5;
-    kRDecay.place(rvX+cardW/4,  fxTopCy,fxKSz,false);
-    kRSize .place(rvX+cardW*3/4,fxTopCy,fxKSz,false);
-    kRMix  .place(rvX+cardW/2,  fxBotCy,fxKSz,false);
-    comboRvb.setBounds(rvX+4,fxY+kFXH-28,cardW-8,22);
+    // Cabinet loader buttons (mapped to the art's recessed slots)
+    int cabX=844; auto px=[&](float v){return cabX+(int)(v*kCabW/477.f);};
+    auto py=[&](float v){return fxY+(int)(v*kFXH/355.f);};
+    btnLoadModel.setBounds(px(31),py(282),px(231)-px(31),py(331)-py(282));
+    btnLoadIR   .setBounds(px(245),py(282),px(445)-px(245),py(332)-py(282));
+    btnClearModel.setBounds(px(445)-20,(py(74)+py(121))/2-8,16,16);
+    btnClearIR   .setBounds(px(445)-20,(py(134)+py(175))/2-8,16,16);
 
-    // Cabinet
-    int cX=W-cabW;
-    int cabH=kFXH;
-    btnLoadModel.setBounds(cX+8,  fxY+cabH-60,(cabW-20)/2,26);
-    btnLoadIR   .setBounds(cX+8+(cabW-20)/2+4,fxY+cabH-60,(cabW-20)/2,26);
-    btnClearModel.setBounds(cX+cabW-22,fxY+82,16,16);
-    btnClearIR   .setBounds(cX+cabW-22,fxY+116,16,16);
+    // Scene bar: 4 slots + 2 bank buttons
+    int bankW=96,gap=10;
+    int slotW=(W-2*bankW-2*16-5*gap)/4;
+    int sy=sceneY+8, sh=kSceneH-16;
+    bankPrev.setBounds(16,sy,bankW,sh);
+    for(int i=0;i<4;++i)
+        sceneBtn[i].setBounds(16+bankW+gap+i*(slotW+gap),sy,slotW,sh);
+    bankNext.setBounds(W-16-bankW,sy,bankW,sh);
 
-    // Scene bar — 5 equally spaced footswitches
-    int sW=(W-16)/5-4;
-    for(int i=0;i<5;++i)
-        sceneBtn[i].setBounds(8+i*(sW+4),sceneY+6,sW,kSceneH-12);
+    // Header preset nav + save + tuner icon
+    presetPrev.setBounds(436,10,28,34);
+    presetNext.setBounds(696,10,28,34);
+    headerSave.setBounds(742,10,64,30);
+    tbTuner.setBounds(W-150,10,30,30);
 
-    // Tuner button in footer
-    btnTuner.setBounds(W/2+62, footY+7, 80, 22);
-
-    // Hidden
     tbCab.setBounds(-200,-200,1,1);
 }
 
@@ -358,456 +379,194 @@ void ArcaneEclipseEditor::paint(juce::Graphics& g)
 {
     g.fillAll(kBg);
     if(tunerVisible){ paintTuner(g); return; }
-    paintTopBar(g);
-    paintStrip(g);
-    paintChain(g);
-    paintAmpHead(g);
-    paintFXSection(g);
-    paintCabSection(g);
-    paintSceneBar(g);
-    paintFooter(g);
-}
-
-void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
-{
-    if(tunerVisible) return;
-    int Y=kTopH+kStripH+kAmpH;
-    int nCards=4, cabW=kCabW;
-    int fxArea=W-cabW-8;
-    int cardW=fxArea/nCards-5;
-    int cardX0=4;
-    int fxKSz=46;
-    int fxTopCy=Y+64;
-    juce::ToggleButton* tbs[]={&stompOD,&stompMod,&stompDelay,&stompReverb};
-    const char* titles[]={"OVERDRIVE","MODULATION","DELAY","REVERB"};
-
-    for(int i=0;i<4;++i){
-        int bX=cardX0+i*(cardW+5);
-        bool on=tbs[i]->getToggleState();
-        juce::Colour fillCol=on?juce::Colour(0xff1e1e2c):kCard;
-
-        // Paint gap strip between the two top-row knobs
-        int k1cx=bX+cardW/4, k2cx=bX+cardW*3/4;
-        int gapLeft  = k1cx + fxKSz/2 + 1;
-        int gapRight = k2cx - fxKSz/2 - 1;
-        // Cover full slider area height (slider bounds = sz+28 for name+val labels)
-        int gapTop   = fxTopCy - fxKSz/2 - 2;
-        int gapH     = fxKSz + 4; // full slider area
-        if(gapRight>gapLeft){
-            g.setColour(fillCol);
-            g.fillRect(gapLeft,gapTop,gapRight-gapLeft,gapH);
-        }
-        // Also fill left of k1 and right of k2 within card bounds
-        // (covers any slider bleed at card edges)
-        g.fillRect(bX+2, gapTop, k1cx-fxKSz/2-bX-3, gapH);
-        g.fillRect(k2cx+fxKSz/2+1, gapTop, (bX+cardW-3)-(k2cx+fxKSz/2+1), gapH);
-
-        // Repaint card header area (title + power icon)
-        g.setColour(fillCol);
-        g.fillRect(bX+2,Y+5,cardW-4,26);
-        g.setColour(on?kPurple.withAlpha(.35f):juce::Colours::transparentBlack);
-        g.fillRect(bX+2,Y+5,cardW-4,2);
-
-        // Title text
-        g.setFont(juce::Font(10.f,juce::Font::bold));
-        g.setColour(on?juce::Colours::white:kMuted.withAlpha(.5f));
-        g.drawText(titles[i],bX+4,Y+12,cardW-8,15,juce::Justification::centred);
-
-        // Power circle
-        float pix=(float)(bX+cardW-22),piy=(float)(Y+11);
-        g.setColour(on?kPurple:kMuted.withAlpha(.4f));
-        g.drawEllipse(pix,piy+1,11.f,11.f,1.5f);
-        g.fillRect(pix+4.5f,piy-1.f,2.f,5.f);
-
-        // Card border on top
-        g.setColour(on?kPurple.withAlpha(.6f):kCardBd);
-        g.drawRoundedRectangle((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8),8.f,on?1.5f:1.f);
+    static juce::Image bg = juce::ImageCache::getFromMemory(BinaryData::background_png,BinaryData::background_pngSize);
+    if(bg.isValid()){
+        float sc=juce::jmax((float)W/bg.getWidth(),(float)H/bg.getHeight());
+        int dw=(int)(bg.getWidth()*sc), dh=(int)(bg.getHeight()*sc);
+        g.drawImage(bg,(W-dw)/2,(H-dh)/2,dw,dh,0,0,bg.getWidth(),bg.getHeight());
     }
+    paintTopBar(g); paintStrip(g); paintChain(g); paintAmpHead(g);
+    paintFXSection(g); paintCabSection(g); paintSceneBar(g); paintFooter(g);
 }
+void ArcaneEclipseEditor::paintOverChildren(juce::Graphics&){ /* card art carries its own borders */ }
 
 void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
 {
-    g.setColour(kSurf); g.fillRect(0,0,W,kTopH);
+    g.setColour(juce::Colour(0xff0c0c13)); g.fillRect(0,0,W,kTopH);
     g.setColour(kCardBd); g.drawHorizontalLine(kTopH,0.f,(float)W);
-    // Star logo
+    // logo
     g.setColour(kPurple);
-    float lx=22.f,ly=24.f,lr=11.f;
-    for(int i=0;i<4;++i){float a=i*juce::MathConstants<float>::pi*.5f;
-        g.drawLine(lx,ly,lx+lr*std::cos(a),ly+lr*std::sin(a),1.5f);}
-    g.fillEllipse(lx-2.5f,ly-2.5f,5.f,5.f);
-    // Brand
-    g.setFont(juce::Font(18.f,juce::Font::bold)); g.setColour(kText);
-    g.drawText("ARCANE",40,10,90,28,juce::Justification::centredLeft);
-    g.setFont(juce::Font(11.f,juce::Font::bold)); g.setColour(kPurple);
-    g.drawText("ECLIPSE",132,14,70,18,juce::Justification::centredLeft);
-    g.setFont(juce::Font(8.f)); g.setColour(kMuted);
-    g.drawText("v1.0.0",205,18,44,12,juce::Justification::centredLeft);
-    // Preset box
-    int px=(W-320)/2,py=8,pw=320,ph=32;
-    g.setColour(juce::Colour(0xff0c0c14));
-    g.fillRoundedRectangle((float)px,(float)py,(float)pw,(float)ph,5.f);
+    float lx=26.f,ly=27.f,R=13.f;
+    for(int i=0;i<8;++i){float a=i*juce::MathConstants<float>::pi/4.f;float rr=(i%2)?R*0.5f:R;
+        g.drawLine(lx,ly,lx+std::cos(a)*rr,ly+std::sin(a)*rr,(i%2)?1.f:1.6f);}
+    g.fillEllipse(lx-3,ly-3,6,6);
+    g.setColour(kPurple.withAlpha(0.4f)); g.drawEllipse(lx-R,ly-R,2*R,2*R,1.f);
+    // brand
+    haloText(g,"ARCANE",juce::Font(19.f,juce::Font::bold),kText,{46,10,110,30},juce::Justification::centredLeft);
+    haloText(g,"ECLIPSE",juce::Font(12.f,juce::Font::bold),kPurple,{150,12,80,26},juce::Justification::centredLeft);
+    haloText(g,"v1.0.0",juce::Font(8.5f),kMuted,{228,14,60,24},juce::Justification::centredLeft);
+    // preset box
+    int pbx=430,pbw=300;
+    g.setColour(juce::Colour(0xff0c0c14)); g.fillRoundedRectangle((float)pbx,8.f,(float)pbw,38.f,6.f);
+    g.setColour(kPurple); g.drawRoundedRectangle(pbx+0.5f,8.5f,pbw-1.f,37.f,6.f,1.4f);
     g.setColour(kPurple);
-    g.drawRoundedRectangle((float)px,(float)py,(float)pw,(float)ph,5.f,1.5f);
-    g.setFont(juce::Font(11.f)); g.setColour(kText);
-    juce::String nm=proc.isNAMLoaded()?proc.getLoadedNAMName():"Mystic Drive";
-    g.drawText(nm,px+12,py+1,pw-20,ph-2,juce::Justification::centredLeft);
-    // Icons
-    for(int xi:{W-98,W-62,W-26}){
-        g.setColour(juce::Colour(0xff252535));
-        g.fillRoundedRectangle((float)xi,8.f,30.f,30.f,4.f);
-        g.setColour(kCardBd);
-        g.drawRoundedRectangle((float)xi,8.f,30.f,30.f,4.f,1.f);
-    }
-    g.setFont(juce::Font(11.f)); g.setColour(kMuted);
-    g.drawText("\u2630",W-98,8,30,30,juce::Justification::centred);
-    g.drawText("?",W-62,8,30,30,juce::Justification::centred);
-    g.setColour(kPurple);
-    g.drawEllipse((float)(W-20),13.f,10.f,10.f,1.5f);
-    g.fillRect((float)(W-16),8.f,2.f,6.f);
+    {juce::Path a;a.startNewSubPath(pbx+20.f,20.f);a.lineTo(pbx+13.f,25.f);a.lineTo(pbx+20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
+    {juce::Path a;a.startNewSubPath(pbx+pbw-20.f,20.f);a.lineTo(pbx+pbw-13.f,25.f);a.lineTo(pbx+pbw-20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
+    juce::String pn = (activeScene>=0 && !scenes[activeScene].isEmpty())?scenes[activeScene].name:juce::String("Mystic Drive");
+    haloText(g,pn,juce::Font(12.f,juce::Font::bold),kText,{pbx+30,12,pbw-60,20},juce::Justification::centred);
+    int dotActive=(activeScene<0?0:activeScene%4);
+    for(int i=0;i<5;++i){ g.setColour(i==dotActive?kPurple:juce::Colour(0x66bcbce2));
+        g.fillEllipse(pbx+pbw/2-24+i*12-2.f,37.f,4.f,4.f);}
+    // icons
+    int ico[4]={W-150,W-114,W-78,W-42};
+    for(int k=0;k<4;++k){g.setColour(juce::Colour(0xff212130));g.fillRoundedRectangle((float)ico[k],10.f,30.f,30.f,5.f);
+        g.setColour(kCardBd);g.drawRoundedRectangle(ico[k]+0.5f,10.5f,29.f,29.f,5.f,1.f);}
+    {float cx=ico[0]+15.f; g.setColour(kMuted);
+     g.drawLine(cx-4,17,cx-4,27,1.6f); g.drawLine(cx+4,17,cx+4,27,1.6f);
+     juce::Path u;u.startNewSubPath(cx-4,27);u.quadraticTo(cx-4,31,cx,31);u.quadraticTo(cx+4,31,cx+4,27);
+     g.strokePath(u,juce::PathStrokeType(1.6f)); g.drawLine(cx,31,cx,34,1.6f);}
+    g.setColour(kMuted);
+    g.drawRect(juce::Rectangle<float>((float)(ico[1]+7),20.f,7.f,10.f),1.4f);
+    g.drawRect(juce::Rectangle<float>((float)(ico[1]+16),20.f,7.f,10.f),1.4f);
+    haloText(g,"?",juce::Font(14.f,juce::Font::bold),kMuted,{ico[2],10,30,30},juce::Justification::centred);
+    g.setColour(kPurple); g.drawEllipse(ico[3]+10.f,19.f,10.f,10.f,1.4f); g.drawLine(ico[3]+15.f,17.f,ico[3]+15.f,24.f,1.4f);
 }
 
 void ArcaneEclipseEditor::paintStrip(juce::Graphics& g)
 {
-    int Y=kTopH;
-    g.setColour(juce::Colour(0xff111116)); g.fillRect(0,Y,W,kStripH);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y+kStripH,0.f,(float)W);
-    paintVU(g,{14.f,(float)(Y+14),14.f,90.f},vuIn);
-    paintVU(g,{(float)(W-28),(float)(Y+14),14.f,90.f},vuOut);
-    // Labels
-    g.setFont(juce::Font(7.f,juce::Font::bold)); g.setColour(kMuted);
-    g.drawText("INPUT",  46,Y+4,80,10,juce::Justification::centred);
-    g.drawText("GATE",  118,Y+4,80,10,juce::Justification::centred);
-    g.drawText("COMPRESSOR",W-198,Y+4,120,10,juce::Justification::centred);
-    g.drawText("OUTPUT",W-86,Y+4,80,10,juce::Justification::centred);
-    // Gate on dot
-    g.setColour(tbGate.getToggleState()?kPurple:kMuted.withAlpha(.3f));
-    g.fillEllipse(174.f,(float)(Y+6),6.f,6.f);
-    // Comp on dot
-    g.setColour(tbComp.getToggleState()?kPurple:kMuted.withAlpha(.3f));
-    g.fillEllipse((float)(W-82),(float)(Y+6),6.f,6.f);
+    int stripY=kTopH;
+    g.setColour(kCardBd); g.drawHorizontalLine(stripY+kStripH,0.f,(float)W);
+    int sCy=stripY+kStripH/2;
+    paintVU(g,{14.f,(float)(sCy-45),14.f,90.f},vuIn);
+    paintVU(g,{(float)(W-28),(float)(sCy-45),14.f,90.f},vuOut);
 }
-
 void ArcaneEclipseEditor::paintVU(juce::Graphics& g,juce::Rectangle<float> b,float lvl)
 {
-    g.setColour(juce::Colour(0xff0a0a10)); g.fillRoundedRectangle(b,2.f);
-    int n=16; float sh=b.getHeight()/n;
-    int lit=(int)(n*juce::jlimit(0.f,1.f,lvl));
-    for(int s=0;s<lit;++s){
-        float sy=b.getBottom()-(s+1)*sh+1.f;
-        if(s>=14)      g.setColour(kRed);
-        else if(s>=11) g.setColour(kPurDim);
-        else           g.setColour(kPurple);
-        g.fillRoundedRectangle(b.getX()+1,sy,b.getWidth()-2,sh-1.5f,1.f);
+    g.setColour(juce::Colour(0xff08080e)); g.fillRoundedRectangle(b,2.f);
+    int n=16,lit=(int)std::round(n*juce::jlimit(0.f,1.f,lvl));
+    float sh=b.getHeight()/n;
+    for(int i=0;i<lit;++i){
+        float sy=b.getBottom()-(i+1)*sh+1;
+        g.setColour(i>=14?kRed:(i>=11?kPurDim:kPurple));
+        g.fillRect(b.getX()+1,sy,b.getWidth()-2,sh-1.5f);
     }
-    g.setColour(kCardBd); g.drawRoundedRectangle(b,2.f,.5f);
+    g.setColour(kCardBd.withAlpha(0.6f)); g.drawRoundedRectangle(b,2.f,1.f);
 }
 
 void ArcaneEclipseEditor::paintChain(juce::Graphics& g)
 {
-    bool nodeActive[9]={
-        tbGate .getToggleState(),
-        tbComp .getToggleState(),
-        stompOD.getToggleState(),
-        proc.isNAMLoaded(),
-        proc.isIRLoaded(),
-        proc.isNAMLoaded(),
-        stompMod.getToggleState(),
-        stompDelay.getToggleState(),
-        stompReverb.getToggleState()
-    };
+    bool act[9]={ tbGate.getToggleState(), tbComp.getToggleState(), stompOD.getToggleState(),
+                  proc.isNAMLoaded(), proc.isIRLoaded(), true,
+                  stompMod.getToggleState(), stompDelay.getToggleState(), stompReverb.getToggleState() };
     for(int i=0;i<9;++i){
         auto nb=chainNodeBounds(i);
-        paintChainNode(g,i,nb,nodeActive[i]);
+        paintChainNode(g,i,nb,act[i]);
+        haloText(g,kChainLabels[i],juce::Font(7.f,juce::Font::bold),act[i]?kPurple:kMuted,
+                 {nb.getX()-3,nb.getBottom()+2,nb.getWidth()+6,10},juce::Justification::centred);
         if(i<8){
-            auto nb2=chainNodeBounds(i+1);
-            float ax=(float)nb.getRight()+2,ay=(float)nb.getCentreY();
-            float ax2=(float)nb2.getX()-2;
-            g.setColour((nodeActive[i]&&nodeActive[i+1])?kPurple.withAlpha(.8f):kMuted.withAlpha(.25f));
-            g.drawLine(ax,ay,ax2,ay,1.5f);
-            g.drawLine(ax2-5,ay-4,ax2,ay,1.5f);
-            g.drawLine(ax2-5,ay+4,ax2,ay,1.5f);
+            auto nn=chainNodeBounds(i+1); bool glow=act[i]&&act[i+1];
+            float ay=(float)nb.getCentreY(), ax=nb.getRight()+1.f, ax2=nn.getX()-1.f;
+            g.setColour((glow?kPurple:kMuted).withAlpha(glow?0.85f:0.3f));
+            g.drawLine(ax,ay,ax2,ay,1.4f);
+            g.drawLine(ax2-4,ay-3,ax2,ay,1.4f); g.drawLine(ax2-4,ay+3,ax2,ay,1.4f);
         }
     }
 }
-
-void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g,int idx,
-                                          juce::Rectangle<int> b,bool active)
+void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g,int idx,juce::Rectangle<int> nb,bool on)
 {
-    g.setColour(active?kPurple.withAlpha(.18f):kCard);
-    g.fillRoundedRectangle(b.toFloat(),7.f);
-    g.setColour(active?kPurple:kCardBd);
-    g.drawRoundedRectangle(b.toFloat(),7.f,active?2.f:1.f);
-
-    auto ib=b.toFloat().reduced(10.f,8.f);
-    float cx=ib.getCentreX(),cy=ib.getCentreY();
-    g.setColour(active?kPurple:kMuted);
-    juce::Path p;
+    auto r=nb.toFloat();
+    g.setColour(on?kPurple.withAlpha(0.16f):juce::Colour(0xb814141e));
+    g.fillRoundedRectangle(r,7.f);
+    g.setColour(on?kPurple:kCardBd); g.drawRoundedRectangle(r,7.f,on?1.6f:1.f);
+    float cx=r.getCentreX(), cy=r.getCentreY()-2.f, R=11.f;
+    g.setColour(on?kPurple:kMuted);
     switch(idx){
-        case 0: g.drawLine(ib.getX(),ib.getBottom(),ib.getRight(),ib.getY(),2.f); break;
-        case 1: p.startNewSubPath(ib.getX(),ib.getBottom());p.lineTo(cx,cy+2);
-                p.cubicTo(cx,cy+2,cx,cy-2,ib.getRight(),ib.getY());
-                g.strokePath(p,juce::PathStrokeType(1.8f)); break;
-        case 2: g.fillEllipse(ib.getX(),cy-5,7,7);g.fillEllipse(ib.getX(),cy+1,7,7);
-                g.drawLine(ib.getX()+8,cy-1,ib.getRight(),cy-1,1.5f);
-                g.drawLine(ib.getX()+8,cy+4,ib.getRight(),cy+4,1.5f); break;
-        case 3: g.drawRoundedRectangle(ib,2.f,1.8f);
-                g.drawLine(ib.getX(),ib.getY()+5,ib.getRight(),ib.getY()+5,1.f);
-                g.fillEllipse(cx-4,cy-2,8,8); break;
-        case 4: g.drawRoundedRectangle(ib.reduced(0,1),3.f,1.8f);
-                g.drawEllipse(cx-5,cy-4,10,10,1.5f);
-                g.drawEllipse(cx-2,cy-1,5,5,1.f); break;
-        case 5:{ float pos[]={.35f,.65f,.25f};
-                for(int f=0;f<3;++f){float fx=ib.getX()+f*(ib.getWidth()/2.5f);
-                    g.drawLine(fx,ib.getY(),fx,ib.getBottom(),1.2f);
-                    g.fillEllipse(fx-2.5f,ib.getY()+pos[f]*ib.getHeight()-2.5f,5,5);}break;}
-        case 6: p.startNewSubPath(ib.getX(),cy);
-                p.cubicTo(ib.getX()+6,cy-7,ib.getX()+12,cy+7,cx,cy);
-                p.cubicTo(cx+6,cy-7,ib.getRight()-5,cy+7,ib.getRight(),cy);
-                g.strokePath(p,juce::PathStrokeType(1.8f)); break;
-        case 7: g.drawEllipse(ib.reduced(1),1.8f);
-                g.drawLine(cx,cy,cx,ib.getY()+5,1.8f);
-                g.drawLine(cx,cy,cx+5,cy+4,1.8f); break;
-        case 8: for(int w=0;w<2;++w){float wy=cy-2+w*7.f;p.clear();
-                p.startNewSubPath(ib.getX(),wy);
-                p.cubicTo(ib.getX()+5,wy-4,ib.getX()+10,wy+4,cx,wy);
-                p.cubicTo(cx+5,wy-4,ib.getRight()-5,wy+4,ib.getRight(),wy);
-                g.strokePath(p,juce::PathStrokeType(1.4f-w*.3f));} break;
+      case 0: g.drawLine(cx-R,cy+R*0.7f,cx+R,cy-R*0.7f,2.f); break;
+      case 1:{juce::Path p;p.startNewSubPath(cx-R,cy+7);p.quadraticTo(cx,cy+7,cx,cy);p.quadraticTo(cx,cy-7,cx+R,cy-7);g.strokePath(p,juce::PathStrokeType(1.8f));}break;
+      case 2: g.fillEllipse(cx-R+2-3,cy-4-3,6,6); g.fillEllipse(cx-R+2-3,cy+4-3,6,6);
+              g.drawLine(cx-R+7,cy-4,cx+R,cy-4,1.6f); g.drawLine(cx-R+7,cy+4,cx+R,cy+4,1.6f); break;
+      case 3: g.drawRoundedRectangle(cx-R,cy-8,2*R,16,2.f,1.6f); g.fillEllipse(cx-4,cy-4,8,8); break;
+      case 4: g.drawRoundedRectangle(cx-R,cy-8,2*R,16,3.f,1.6f); g.drawEllipse(cx-5,cy-5,10,10,1.5f); g.fillEllipse(cx-2,cy-2,4,4); break;
+      case 5:{float pk[3]={0.35f,0.65f,0.28f};for(int f=0;f<3;++f){float fx=cx-R+f*R;g.drawLine(fx,cy-8,fx,cy+8,1.3f);g.fillEllipse(fx-2.4f,cy-8+pk[f]*16-2.4f,4.8f,4.8f);} }break;
+      case 6:{juce::Path p;p.startNewSubPath(cx-R,cy);p.quadraticTo(cx-R/2,cy-8,cx,cy);p.quadraticTo(cx+R/2,cy+8,cx+R,cy);g.strokePath(p,juce::PathStrokeType(1.8f));}break;
+      case 7: g.drawEllipse(cx-(R-1),cy-(R-1),2*(R-1),2*(R-1),1.7f); g.drawLine(cx,cy,cx,cy-6,1.7f); g.drawLine(cx,cy,cx+5,cy+3,1.7f); break;
+      case 8:{for(int w=0;w<3;++w){float wy=cy-6+w*6;juce::Path p;p.startNewSubPath(cx-R,wy);p.quadraticTo(cx-R/2,wy-4,cx,wy);p.quadraticTo(cx+R/2,wy+4,cx+R,wy);g.strokePath(p,juce::PathStrokeType(1.4f));}}break;
     }
-    g.setFont(juce::Font(7.f,juce::Font::bold));
-    g.setColour(active?kPurple:kMuted);
-    g.drawText(kChainLabels[idx],
-               juce::Rectangle<int>(b.getX()-3,b.getBottom()+2,b.getWidth()+6,11),
-               juce::Justification::centred);
 }
 
 void ArcaneEclipseEditor::paintAmpHead(juce::Graphics& g)
 {
-    int Y=kTopH+kStripH, H2=kAmpH;
-    // Chassis gradient
-    juce::ColourGradient cg(juce::Colour(0xff1c1c28),0,(float)Y,
-                             juce::Colour(0xff111118),0,(float)(Y+H2),false);
-    g.setGradientFill(cg); g.fillRect(0,Y,W,H2);
-    g.setColour(kPurple.withAlpha(.6f)); g.fillRect(0,Y,W,2);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y+H2,0.f,(float)W);
-
-    // Grille (upper 55%)
-    int gH=(int)(H2*.55f);
-    g.setColour(juce::Colour(0xff0a0a10));
-    g.fillRect(12,Y+6,W-24,gH-4);
-    g.setColour(juce::Colour(0xff131320));
-    for(int mx=16;mx<W-16;mx+=7) g.drawVerticalLine(mx,(float)(Y+8),(float)(Y+gH-2));
-    for(int my=Y+8;my<Y+gH-2;my+=6) g.drawHorizontalLine(my,16.f,(float)(W-16));
-
-    // Handle
-    juce::ColourGradient hg(juce::Colour(0xff303048),(float)(W/2),0,
-                             juce::Colour(0xff181828),(float)(W/2),14,false);
-    g.setGradientFill(hg);
-    g.fillRoundedRectangle((float)(W/2-70),(float)(Y+2),140.f,14.f,7.f);
-
-    // Nameplate
-    int npW=300,npH=64,npX=(W-npW)/2,npY=Y+gH/2-npH/2;
-    juce::ColourGradient npg(juce::Colour(0xff252538),(float)npX,(float)npY,
-                              juce::Colour(0xff141422),(float)npX,(float)(npY+npH),false);
-    g.setGradientFill(npg); g.fillRoundedRectangle((float)npX,(float)npY,(float)npW,(float)npH,5.f);
-    g.setColour(kPurple); g.drawRoundedRectangle((float)npX,(float)npY,(float)npW,(float)npH,5.f,1.5f);
-    for(auto pt:{std::pair<int,int>{npX+7,npY+7},{npX+npW-7,npY+7},{npX+7,npY+npH-7},{npX+npW-7,npY+npH-7}}){
-        g.setColour(kPurDim); g.fillEllipse((float)pt.first-3,(float)pt.second-3,6.f,6.f);
-    }
-    g.setFont(juce::Font("Georgia",26.f,juce::Font::bold)); g.setColour(kText);
-    g.drawText("ARCANE",juce::Rectangle<int>(npX,npY+6,npW,28),juce::Justification::centred);
-    g.setFont(juce::Font(9.f,juce::Font::bold)); g.setColour(kPurple);
-    g.drawText("ECLIPSE",juce::Rectangle<int>(npX,npY+36,npW,16),juce::Justification::centred);
-    // Purple underline
-    g.setColour(kPurple); g.fillRect((float)(npX+npW/2-30),(float)(npY+33),60.f,1.5f);
-
-    // Faceplate
-    int fY=Y+gH,fH=H2-gH;
-    g.setColour(juce::Colour(0xff161622)); g.fillRect(0,fY,W,fH);
-    g.setColour(kPurple.withAlpha(.5f)); g.fillRect(0,fY,W,2);
-    // Jack
-    g.setColour(juce::Colour(0xff0a0a12)); g.fillEllipse(16.f,(float)(fY+fH/2-9),18.f,18.f);
-    g.setColour(kCardBd); g.drawEllipse(16.f,(float)(fY+fH/2-9),18.f,18.f,1.5f);
-    g.setFont(juce::Font(7.f)); g.setColour(kMuted);
-    g.drawText("IN",10,fY+3,28,10,juce::Justification::centred);
-    // Power LED
-    g.setColour(kPurple); g.fillEllipse((float)(W-38),(float)(fY+fH/2-12),24.f,24.f);
-    g.setColour(kPurple.brighter(.5f)); g.fillEllipse((float)(W-33),(float)(fY+fH/2-7),10.f,10.f);
-    g.setFont(juce::Font(7.f)); g.setColour(kMuted);
-    g.drawText("POWER",(float)(W-48),(float)(fY+fH/2+14),44,10,juce::Justification::centred);
+    static juce::Image amp = juce::ImageCache::getFromMemory(BinaryData::amp_png,BinaryData::amp_pngSize);
+    int ampY=kTopH+kStripH;
+    if(amp.isValid())
+        g.drawImage(amp,10,ampY,W-20,kAmpH,0,0,amp.getWidth(),amp.getHeight());
 }
 
 void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
 {
-    int Y=kTopH+kStripH+kAmpH;
-    g.setColour(kBg); g.fillRect(0,Y,W,kFXH);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
-
-    int nCards=4,cabW=kCabW;
-    int fxArea=W-cabW-8;
-    int cardW=fxArea/nCards-5;
-
-    const char* titles[]={"OVERDRIVE","MODULATION","DELAY","REVERB"};
-    juce::ToggleButton* tbs[]={&stompOD,&stompMod,&stompDelay,&stompReverb};
-    int cardX0=4;
-
+    static juce::Image card = juce::ImageCache::getFromMemory(BinaryData::fxcard_png,BinaryData::fxcard_pngSize);
+    int fxY=kTopH+kStripH+kAmpH, cardW=196, stepp=208;
+    const char* titles[4]={"OVERDRIVE","MODULATION","DELAY","REVERB"};
     for(int i=0;i<4;++i){
-        int bX=cardX0+i*(cardW+5);
-        bool on=tbs[i]->getToggleState();
-        // Card bg
-        g.setColour(on?juce::Colour(0xff1e1e2c):kCard);
-        g.fillRoundedRectangle((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8),8.f);
-        g.setColour(on?kPurple.withAlpha(.6f):kCardBd);
-        g.drawRoundedRectangle((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8),8.f,on?1.5f:1.f);
-        if(on){g.setColour(kPurple.withAlpha(.35f));g.fillRect((float)(bX+1),(float)(Y+4),(float)(cardW-2),2.f);}
-        // Title
-        g.setFont(juce::Font(10.f,juce::Font::bold));
-        g.setColour(on?juce::Colours::white:kMuted.withAlpha(.5f));
-        g.drawText(titles[i],bX+4,Y+12,cardW-8,15,juce::Justification::centred);
-        // Power icon
-        float pix=(float)(bX+cardW-22),piy=(float)(Y+11);
-        g.setColour(on?kPurple:kMuted.withAlpha(.4f));
-        g.drawEllipse(pix,piy+1,11.f,11.f,1.5f);
-        g.fillRect(pix+4.5f,piy-1.f,2.f,5.f);
+        int x=10+i*stepp;
+        if(card.isValid())
+            g.drawImage(card,x,fxY,cardW,kFXH,0,0,card.getWidth(),card.getHeight());
+        haloText(g,titles[i],juce::Font(10.f,juce::Font::bold),juce::Colours::white,
+                 {x,fxY+14,cardW,16},juce::Justification::centred);
     }
-    // Repaint card backgrounds OVER any slider component backgrounds
-    // This covers the default grey/dark bars that JUCE draws between rotary knobs
-    for(int i=0;i<4;++i){
-        int bX=cardX0+i*(cardW+5);
-        bool on=tbs[i]->getToggleState();
-        // Refill the card area except knob positions
-        juce::Rectangle<float> cardR((float)bX+1,(float)(Y+4),(float)(cardW-2),(float)(kFXH-8));
-        // Top section (above knobs)
-        g.setColour(on?juce::Colour(0xff1e1e2c):kCard);
-        g.fillRoundedRectangle(cardR,8.f);
-        g.setColour(on?kPurple.withAlpha(.6f):kCardBd);
-        g.drawRoundedRectangle(cardR,8.f,on?1.5f:1.f);
-        if(on){g.setColour(kPurple.withAlpha(.35f));g.fillRect((float)(bX+1),(float)(Y+4),(float)(cardW-2),2.f);}
-        g.setFont(juce::Font(10.f,juce::Font::bold));
-        g.setColour(on?juce::Colours::white:kMuted.withAlpha(.5f));
-        g.drawText(titles[i],bX+4,Y+12,cardW-8,15,juce::Justification::centred);
-        float pix=(float)(bX+cardW-22),piy=(float)(Y+11);
-        g.setColour(on?kPurple:kMuted.withAlpha(.4f));
-        g.drawEllipse(pix,piy+1,11.f,11.f,1.5f);
-        g.fillRect(pix+4.5f,piy-1.f,2.f,5.f);
-    }
-
-    // Divider before cab
-    g.setColour(kCardBd);
-    g.drawVerticalLine(W-cabW-4,(float)(Y+4),(float)(Y+kFXH-4));
 }
 
 void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
 {
-    int fxY=kTopH+kStripH+kAmpH;
-    int cX=W-kCabW,cabH=kFXH;
-
-    // Card
-    g.setColour(kCard);
-    g.fillRoundedRectangle((float)cX,(float)(fxY+4),kCabW-4,(float)(cabH-8),8.f);
-    g.setColour(kPurple.withAlpha(.5f));
-    g.drawRoundedRectangle((float)cX,(float)(fxY+4),kCabW-4,(float)(cabH-8),8.f,1.5f);
-
-    // Header
-    g.setColour(kCardBd); g.drawHorizontalLine(fxY+30,(float)cX,(float)(cX+kCabW-4));
-    g.setFont(juce::Font(10.f,juce::Font::bold)); g.setColour(kPurple);
-    g.drawText("NAM & IR LOADER",cX+2,fxY+8,kCabW-8,18,juce::Justification::centred);
-
-    // Cabinet photo — compact to give more field space
-    int phX=cX+6,phY=fxY+38,phW=88,phH=110;
-    g.setColour(juce::Colour(0xff080810)); g.fillRoundedRectangle((float)phX,(float)phY,(float)phW,(float)phH,5.f);
-    g.setColour(kCardBd); g.drawRoundedRectangle((float)phX,(float)phY,(float)phW,(float)phH,5.f,1.f);
-    // Speaker
-    float sx=(float)(phX+phW/2),sy=(float)(phY+phH/2);
-    for(float rr=20.f;rr<44.f;rr+=9.f){g.setColour(juce::Colour(0xff1a1a2e));g.drawEllipse(sx-rr,sy-rr,rr*2,rr*2,2.f);}
-    g.setColour(juce::Colour(0xff222234));g.fillEllipse(sx-6,sy-6,12.f,12.f);
-    g.setFont(juce::Font(7.f,juce::Font::bold)); g.setColour(juce::Colour(0xff2a2a40));
-    g.drawText("ARCANE",phX,phY+phH-14,phW,12,juce::Justification::centred);
-
-    // Fields
-    int rx=cX+112,ry=fxY+38;
-    auto drawField=[&](const juce::String& lbl,const juce::String& val,int y,bool loaded){
-        g.setFont(juce::Font(7.f,juce::Font::bold)); g.setColour(kMuted);
-        g.drawText(lbl,rx,y,80,11,juce::Justification::centredLeft);
-        g.setColour(juce::Colour(0xff0c0c14));
-        g.fillRoundedRectangle((float)rx,(float)(y+13),(float)(kCabW-cX+cX-rx-12),22.f,4.f);
-        g.setColour(loaded?kPurple.withAlpha(.4f):kCardBd);
-        g.drawRoundedRectangle((float)rx,(float)(y+13),(float)(kCabW-cX+cX-rx-12),22.f,4.f,1.f);
-        g.setFont(juce::Font(9.f));
-        g.setColour(loaded?kText:kMuted.withAlpha(.5f));
-        g.drawFittedText(val,rx+4,y+14,(int)(kCabW-cX+cX-rx-20),18,juce::Justification::centredLeft,1);
-    };
-    drawField("MODEL",proc.isNAMLoaded()?proc.getLoadedNAMName():"No model loaded",ry,  proc.isNAMLoaded());
-    drawField("IR",   proc.isIRLoaded() ?proc.getLoadedIRName() :"No IR loaded",   ry+42,proc.isIRLoaded());
-
-    // AMP/CAB dots
-    g.setColour(proc.isNAMLoaded()?kGreen:kMuted.withAlpha(.3f));
-    g.fillEllipse((float)(cX+kCabW-36),(float)(fxY+cabH-22),8.f,8.f);
-    g.setFont(juce::Font(8.f)); g.setColour(kMuted);
-    g.drawText("AMP",(float)(cX+kCabW-26),(float)(fxY+cabH-24),28,12,juce::Justification::centredLeft);
-    g.setColour(proc.isIRLoaded()?kGreen:kMuted.withAlpha(.3f));
-    g.fillEllipse((float)(cX+kCabW-36),(float)(fxY+cabH-8),8.f,8.f);
-    g.drawText("CAB",(float)(cX+kCabW-26),(float)(fxY+cabH-10),28,12,juce::Justification::centredLeft);
+    static juce::Image cab = juce::ImageCache::getFromMemory(BinaryData::cabinet_png,BinaryData::cabinet_pngSize);
+    int fxY=kTopH+kStripH+kAmpH, cabX=844;
+    if(cab.isValid())
+        g.drawImage(cab,cabX,fxY,kCabW,kFXH,0,0,cab.getWidth(),cab.getHeight());
+    auto px=[&](float v){return cabX+(int)(v*kCabW/477.f);};
+    auto py=[&](float v){return fxY+(int)(v*kFXH/355.f);};
+    {int y0=py(74),y1=py(121);
+     haloText(g,"MODEL",juce::Font(8.f,juce::Font::bold),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
+     juce::String v=proc.isNAMLoaded()?proc.getLoadedNAMName():juce::String("No model loaded");
+     haloText(g,v,juce::Font(9.f),juce::Colour(0xffd4d4ee),{px(258),y0+(y1-y0)/2-2,px(430)-px(258),14},juce::Justification::centredLeft);}
+    {int y0=py(134),y1=py(175);
+     haloText(g,"IR",juce::Font(8.f,juce::Font::bold),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
+     juce::String v=proc.isIRLoaded()?proc.getLoadedIRName():juce::String("No IR loaded");
+     haloText(g,v,juce::Font(9.f),juce::Colour(0xffd4d4ee),{px(258),y0+(y1-y0)/2-2,px(430)-px(258),14},juce::Justification::centredLeft);}
+    // arcane emblem in slot 3
+    {float ex=(float)px(345), ey=(float)py(214), R=8.f;
+     g.setColour(kPurDim.withAlpha(0.7f));
+     for(int k=0;k<3;++k){g.drawLine((float)px(258)+k*14.f,ey,(float)px(258)+k*14.f+8.f,ey,1.4f);
+        g.drawLine((float)px(432)-k*14.f-8.f,ey,(float)px(432)-k*14.f,ey,1.4f);}
+     g.setColour(kPurple.withAlpha(0.9f)); g.drawEllipse(ex-R,ey-R,2*R,2*R,1.3f);
+     g.setColour(kPurDim.withAlpha(0.5f)); g.drawEllipse(ex-R-3.5f,ey-R-3.5f,2*(R+3.5f),2*(R+3.5f),0.8f);
+     juce::Path st;st.startNewSubPath(ex,ey-R-2);st.lineTo(ex+2,ey);st.lineTo(ex,ey+R+2);st.lineTo(ex-2,ey);st.closeSubPath();
+     g.setColour(kPurple); g.fillPath(st);
+     juce::Path st2;st2.startNewSubPath(ex-R-2,ey);st2.lineTo(ex,ey-2);st2.lineTo(ex+R+2,ey);st2.lineTo(ex,ey+2);st2.closeSubPath();
+     g.setColour(juce::Colour(0xffc9a3ff)); g.fillPath(st2);
+     g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(ex-1.7f,ey-1.7f,3.4f,3.4f);}
 }
 
-void ArcaneEclipseEditor::paintSceneBar(juce::Graphics& g)
-{
-    int Y=kTopH+kStripH+kAmpH+kFXH;
-    juce::ColourGradient sg(juce::Colour(0xff1a1a26),0,(float)Y,
-                             juce::Colour(0xff111118),0,(float)(Y+kSceneH),false);
-    g.setGradientFill(sg); g.fillRect(0,Y,W,kSceneH);
-    g.setColour(kPurple.withAlpha(.3f)); g.fillRect(0,Y,W,1);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y+kSceneH,0.f,(float)W);
-
-    // Draw scene buttons appearance
-    int sW=(W-16)/5-4;
-    for(int i=0;i<5;++i){
-        int bX=8+i*(sW+4),bY=Y+6;
-        bool active=(i==activeScene);
-        bool hasData=!scenes[i].isEmpty();
-        g.setColour(active?kPurple.withAlpha(.25f):(hasData?juce::Colour(0xff1e1e2c):kCard));
-        g.fillRoundedRectangle((float)bX,(float)bY,(float)sW,(float)(kSceneH-12),6.f);
-        g.setColour(active?kPurple:(hasData?kPurDim:kCardBd));
-        g.drawRoundedRectangle((float)bX,(float)bY,(float)sW,(float)(kSceneH-12),6.f,active?2.f:1.f);
-        // LED dot
-        g.setColour(active?kPurple:(hasData?kPurDim.withAlpha(.5f):kMuted.withAlpha(.2f)));
-        g.fillEllipse((float)(bX+8),(float)(bY+kSceneH/2-14),6.f,6.f);
-        // Scene label
-        g.setFont(juce::Font(9.f,juce::Font::bold));
-        g.setColour(active?juce::Colours::white:(hasData?kText:kMuted.withAlpha(.4f)));
-        g.drawText(hasData?scenes[i].name:"SCENE "+juce::String(i+1),
-                   bX+18,bY+1,sW-22,kSceneH-14,juce::Justification::centredLeft);
-        // Save indicator dot (top right of slot)
-        if(hasData){
-            g.setColour(kPurDim.withAlpha(.6f));
-            g.fillEllipse((float)(bX+sW-10),(float)(bY+4),5.f,5.f);
-        }
-    }
-}
+void ArcaneEclipseEditor::paintSceneBar(juce::Graphics& g){ juce::ignoreUnused(g); }
 
 void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
 {
     int Y=kTopH+kStripH+kAmpH+kFXH+kSceneH;
-    juce::ColourGradient fg(juce::Colour(0xff111116),0,(float)Y,kBg,0,(float)H,false);
+    juce::ColourGradient fg(juce::Colour(0xff0c0c12),0,(float)Y,juce::Colour(0xff08080e),0,(float)H,false);
     g.setGradientFill(fg); g.fillRect(0,Y,W,kFootH);
     g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
-    // Headphone icon
     g.setColour(kMuted); juce::Path hp;
     hp.addCentredArc(24.f,(float)(Y+17),8.f,7.f,0.f,3.3f,6.22f,true);
     g.strokePath(hp,juce::PathStrokeType(2.f));
     g.fillEllipse(14.f,(float)(Y+20),5.f,8.f); g.fillEllipse(27.f,(float)(Y+20),5.f,8.f);
     g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
     g.drawText("INPUT MONITOR",36,Y+9,105,16,juce::Justification::centredLeft);
-    // ON badge
     g.setColour(kPurple); g.fillRoundedRectangle(142.f,(float)(Y+10),28.f,14.f,3.f);
     g.setFont(juce::Font(7.f,juce::Font::bold)); g.setColour(juce::Colours::white);
     g.drawText("ON",142,Y+10,28,14,juce::Justification::centred);
-    // RIG/FX
     g.setColour(kPurple); g.fillRoundedRectangle((float)(W/2-30),(float)(Y+6),58.f,22.f,4.f);
     g.setFont(juce::Font(9.f,juce::Font::bold)); g.setColour(juce::Colours::white);
     g.drawText("RIG",W/2-30,Y+6,58,22,juce::Justification::centred);
     g.setColour(kMuted); g.drawText("FX",W/2+36,Y+9,24,16,juce::Justification::centred);
-    // Tuner button drawn by the TextButton component itself — nothing to draw here
-    // AMP/CAB right
     g.setColour(proc.isNAMLoaded()?kPurple:kMuted.withAlpha(.3f));
     g.fillEllipse((float)(W-80),(float)(Y+13),8.f,8.f);
     g.setFont(juce::Font(8.f)); g.setColour(kMuted);
@@ -820,52 +579,38 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
 void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)
 {
     g.fillAll(kBg);
-    // Header
     g.setColour(kSurf); g.fillRect(0,0,W,kTopH);
     g.setColour(kPurple.withAlpha(.6f)); g.fillRect(0,kTopH-2,W,2);
     g.setFont(juce::Font(16.f,juce::Font::bold)); g.setColour(kText);
     g.drawText("CHROMATIC TUNER",0,0,W,kTopH,juce::Justification::centred);
-    // Close hint
     g.setFont(juce::Font(9.f)); g.setColour(kMuted);
-    g.drawText("Press TUNER to return",W-160,0,155,kTopH,juce::Justification::centredLeft);
-
+    g.drawText("Press the fork icon to return",W-200,0,195,kTopH,juce::Justification::centredLeft);
     int cx=W/2,cy=H/2-20;
-    // Outer ring
     g.setColour(kCard); g.fillEllipse((float)(cx-180),(float)(cy-180),360.f,360.f);
     g.setColour(kCardBd); g.drawEllipse((float)(cx-180),(float)(cy-180),360.f,360.f,2.f);
-    // Center zone (in tune = green)
     bool inTune=std::fabs(tunerCents)<3.f && tunerHz>0;
     g.setColour(inTune?kGreen.withAlpha(.2f):kCard);
     g.fillEllipse((float)(cx-40),(float)(cy-40),80.f,80.f);
-    // Cents needle
     if(tunerHz>0){
         float angle=juce::MathConstants<float>::pi*(tunerCents/60.f);
         float nx=cx+160.f*std::sin(angle),ny=cy-160.f*std::cos(angle);
-        g.setColour(inTune?kGreen:kPurple);
-        g.drawLine((float)cx,(float)cy,nx,ny,3.f);
+        g.setColour(inTune?kGreen:kPurple); g.drawLine((float)cx,(float)cy,nx,ny,3.f);
     }
-    // Note name
     g.setFont(juce::Font("Georgia",72.f,juce::Font::bold));
     g.setColour(inTune?kGreen:kText);
     g.drawText(tunerHz>0?tunerNote:"--",cx-80,cy-50,160,100,juce::Justification::centred);
-    // Cents display
     g.setFont(juce::Font(14.f)); g.setColour(kMuted);
-    if(tunerHz>0)
-        g.drawText(juce::String(tunerCents,1)+" cents",cx-80,cy+50,160,24,juce::Justification::centred);
-    // Cent markers
+    if(tunerHz>0) g.drawText(juce::String(tunerCents,1)+" cents",cx-80,cy+50,160,24,juce::Justification::centred);
     for(int c=-6;c<=6;++c){
         float a=juce::MathConstants<float>::pi*(c/10.f);
         float r1=150.f,r2=c==0?165.f:158.f;
         float x1=cx+r1*std::sin(a),y1=cy-r1*std::cos(a);
         float x2=cx+r2*std::sin(a),y2=cy-r2*std::cos(a);
-        g.setColour(c==0?kPurple:kCardBd);
-        g.drawLine(x1,y1,x2,y2,c==0?2.f:1.f);
+        g.setColour(c==0?kPurple:kCardBd); g.drawLine(x1,y1,x2,y2,c==0?2.f:1.f);
     }
-    // Hz readout
     g.setFont(juce::Font(11.f)); g.setColour(kMuted);
     g.drawText(tunerHz>0?juce::String(tunerHz,1)+" Hz":"---",cx-80,cy+78,160,20,juce::Justification::centred);
-    // Footer hint
     g.setColour(kCardBd); g.drawHorizontalLine(H-kFootH,0.f,(float)W);
     g.setFont(juce::Font(9.f)); g.setColour(kMuted);
-    g.drawText("Click TUNER to close",0,H-kFootH,W,kFootH,juce::Justification::centred);
+    g.drawText("Click the fork icon to close",0,H-kFootH,W,kFootH,juce::Justification::centred);
 }

@@ -61,6 +61,10 @@ target_compile_definitions(ArcaneEclipse PUBLIC
 
 juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/background.png
+    Resources/panels/amp.png
+    Resources/panels/fxcard.png
+    Resources/panels/cabinet.png
+    Resources/knobs/knob_unified.png
     Resources/knobs/knob_strip.png
     Resources/knobs/knob_amp.png
     Resources/knobs/knob_fx.png
