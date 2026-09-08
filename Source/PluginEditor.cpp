@@ -207,22 +207,22 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
         chooserModel=std::make_unique<juce::FileChooser>("Load NAM Model",
             juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.nam");
         chooserModel->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadNAMModel(r[0]);repaint();}});
+            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadNAMModel(r[0]);curNAMPath=r[0].getFullPathName();repaint();}});
     };
     addAndMakeVisible(btnLoadIR);
     btnLoadIR.onClick=[this]{
         chooserIR=std::make_unique<juce::FileChooser>("Load IR",
             juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.wav");
         chooserIR->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadIR(r[0]);repaint();}});
+            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadIR(r[0]);curIRPath=r[0].getFullPathName();repaint();}});
     };
     btnClearModel.setColour(juce::TextButton::buttonColourId,juce::Colours::transparentBlack);
     btnClearModel.setColour(juce::TextButton::textColourOffId,kMuted);
-    btnClearModel.onClick=[this]{proc.unloadNAMModel();repaint();};
+    btnClearModel.onClick=[this]{proc.unloadNAMModel();curNAMPath.clear();repaint();};
     addAndMakeVisible(btnClearModel);
     btnClearIR.setColour(juce::TextButton::buttonColourId,juce::Colours::transparentBlack);
     btnClearIR.setColour(juce::TextButton::textColourOffId,kMuted);
-    btnClearIR.onClick=[this]{proc.unloadIR();repaint();};
+    btnClearIR.onClick=[this]{proc.unloadIR();curIRPath.clear();repaint();};
     addAndMakeVisible(btnClearIR);
 
     // Scene slots 1-4
@@ -258,7 +258,11 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
 
     // Tuner toggle sits on the header tuning-fork icon
     tbTuner.setClickingTogglesState(true);
-    tbTuner.onClick=[this]{ tunerVisible=tbTuner.getToggleState(); repaint(); };
+    tbTuner.onClick=[this]{
+        tunerVisible=tbTuner.getToggleState();
+        for(auto* c:getChildren()) if(c!=&tbTuner) c->setVisible(!tunerVisible);
+        repaint();
+    };
     addAndMakeVisible(tbTuner);
 
     refreshSceneButtons();
@@ -275,8 +279,8 @@ void ArcaneEclipseEditor::refreshSceneButtons(){
 
 // ── Scene save/load ───────────────────────────────────────────────────────────
 void ArcaneEclipseEditor::saveScene(int slot){
-    scenes[slot].namPath = proc.isNAMLoaded()?proc.getLoadedNAMName():"";
-    scenes[slot].irPath  = proc.isIRLoaded() ?proc.getLoadedIRName() :"";
+    scenes[slot].namPath = curNAMPath;
+    scenes[slot].irPath  = curIRPath;
     scenes[slot].params  = proc.apvts.copyState();
     scenes[slot].name    = "Scene "+juce::String(slot+1);
     activeScene=slot;
@@ -285,6 +289,22 @@ void ArcaneEclipseEditor::loadScene(int slot){
     if(scenes[slot].isEmpty()) return;
     if(scenes[slot].params.isValid())
         proc.apvts.replaceState(scenes[slot].params);
+    // Recall the scene's NAM model (reload only when it changes)
+    if(scenes[slot].namPath != curNAMPath){
+        if(scenes[slot].namPath.isNotEmpty() && juce::File(scenes[slot].namPath).existsAsFile())
+            proc.loadNAMModel(juce::File(scenes[slot].namPath));
+        else
+            proc.unloadNAMModel();
+        curNAMPath = scenes[slot].namPath;
+    }
+    // Recall the scene's IR (reload only when it changes)
+    if(scenes[slot].irPath != curIRPath){
+        if(scenes[slot].irPath.isNotEmpty() && juce::File(scenes[slot].irPath).existsAsFile())
+            proc.loadIR(juce::File(scenes[slot].irPath));
+        else
+            proc.unloadIR();
+        curIRPath = scenes[slot].irPath;
+    }
     activeScene=slot;
 }
 

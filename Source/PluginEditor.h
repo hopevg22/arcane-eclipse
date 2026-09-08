@@ -112,6 +112,7 @@ private:
     juce::String tunerNote;
     float tunerCents=0.f;
     int activeScene=-1; int currentBank=0;
+    juce::String curNAMPath, curIRPath;
     SceneData scenes[20];
 
     // Strip knobs
