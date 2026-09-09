@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include <atomic>
+#include <vector>
 #include "NeuralModel.h"
 #include "Compressor.h"
 #include "Overdrive.h"
@@ -21,7 +23,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
     const juce::String getName() const override { return "Arcane Eclipse"; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 4.0; }
     int getNumPrograms() override { return 1; }
@@ -41,6 +43,12 @@ public:
     juce::String getLoadedIRName()  const { return loadedIRName; }
     bool isNAMLoaded() const { return namModel != nullptr; }
     bool isIRLoaded()  const { return irLoaded; }
+
+    // MIDI learn
+    void midiLearnStart(const juce::String& paramID);
+    void midiLearnClear(const juce::String& paramID);
+    juce::String midiLearningParamID() const;
+    int  ccForParam(const juce::String& paramID) const;
 
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -109,6 +117,13 @@ private:
     juce::dsp::IIR::Filter<float> bassFilter[2], midFilter[2], trebleFilter[2], presenceFilter[2];
     void updateEQ();
     float gateEnvelope = 0.f;
+
+    // MIDI learn state
+    std::vector<juce::String> learnParamIDs;
+    std::vector<juce::RangedAudioParameter*> learnParamPtrs;
+    std::atomic<int> ccMap[128];
+    std::atomic<int> learnTarget { -1 };
+    int indexOfParam(const juce::String& id) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseProcessor)
 };

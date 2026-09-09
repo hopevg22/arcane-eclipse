@@ -6,7 +6,18 @@ ArcaneEclipseProcessor::ArcaneEclipseProcessor()
         .withInput("Input",  juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "PARAMETERS", createParameterLayout())
-{}
+{
+    learnParamIDs = {
+        idInputGain, idNoiseGate, idCompThresh, idOutputGain,
+        idAmpGain, idAmpBass, idAmpMid, idAmpTreble, idAmpPresence, idAmpMaster,
+        idODDrive, idODTone, idODLevel,
+        idModRate, idModDepth, idModMix,
+        idDelayTime, idDelayFeedback, idDelayMix,
+        idReverbDecay, idReverbSize, idReverbMix
+    };
+    for (auto& id : learnParamIDs) learnParamPtrs.push_back(apvts.getParameter(id));
+    for (auto& c : ccMap) c.store(-1);
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::createParameterLayout()
 {
@@ -128,10 +139,25 @@ void ArcaneEclipseProcessor::updateEQ()
     }
 }
 
-void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     int numSamples = buffer.getNumSamples(), numCh = buffer.getNumChannels();
+
+    // MIDI CC learn / control
+    for (const auto meta : midi) {
+        const auto msg = meta.getMessage();
+        if (msg.isController()) {
+            const int cc = msg.getControllerNumber();
+            const int lt = learnTarget.load();
+            if (lt >= 0) { ccMap[cc].store(lt); learnTarget.store(-1); }
+            else {
+                const int pi = ccMap[cc].load();
+                if (pi >= 0 && pi < (int) learnParamPtrs.size() && learnParamPtrs[pi] != nullptr)
+                    learnParamPtrs[pi]->setValueNotifyingHost(msg.getControllerValue() / 127.0f);
+            }
+        }
+    }
 
     // 1. INPUT GAIN
     buffer.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idInputGain)->load()));
@@ -337,10 +363,61 @@ bool ArcaneEclipseProcessor::loadIR(const juce::File& file)
 }
 
 void ArcaneEclipseProcessor::getStateInformation(juce::MemoryBlock& d)
-{ if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, d); }
+{
+    if (auto xml = apvts.copyState().createXml()) {
+        auto* mm = xml->createNewChildElement("MIDIMAP");
+        for (int c = 0; c < 128; ++c) {
+            int pi = ccMap[c].load();
+            if (pi >= 0 && pi < (int) learnParamIDs.size()) {
+                auto* e = mm->createNewChildElement("M");
+                e->setAttribute("cc", c);
+                e->setAttribute("param", learnParamIDs[pi]);
+            }
+        }
+        copyXmlToBinary(*xml, d);
+    }
+}
 
 void ArcaneEclipseProcessor::setStateInformation(const void* data, int sizeInBytes)
-{ if (auto xml = getXmlFromBinary(data, sizeInBytes)) apvts.replaceState(juce::ValueTree::fromXml(*xml)); }
+{
+    if (auto xml = getXmlFromBinary(data, sizeInBytes)) {
+        for (auto& c : ccMap) c.store(-1);
+        if (auto* mm = xml->getChildByName("MIDIMAP")) {
+            for (auto* e : mm->getChildIterator()) {
+                int cc = e->getIntAttribute("cc", -1);
+                int idx = indexOfParam(e->getStringAttribute("param"));
+                if (cc >= 0 && cc < 128 && idx >= 0) ccMap[cc].store(idx);
+            }
+            xml->removeChildElement(mm, true);
+        }
+        apvts.replaceState(juce::ValueTree::fromXml(*xml));
+    }
+}
+
+// ── MIDI learn ──────────────────────────────────────────────────────────────
+int ArcaneEclipseProcessor::indexOfParam(const juce::String& id) const {
+    for (int i = 0; i < (int) learnParamIDs.size(); ++i) if (learnParamIDs[i] == id) return i;
+    return -1;
+}
+void ArcaneEclipseProcessor::midiLearnStart(const juce::String& paramID) {
+    learnTarget.store(indexOfParam(paramID));
+}
+void ArcaneEclipseProcessor::midiLearnClear(const juce::String& paramID) {
+    int idx = indexOfParam(paramID);
+    if (idx < 0) return;
+    for (int c = 0; c < 128; ++c) if (ccMap[c].load() == idx) ccMap[c].store(-1);
+    if (learnTarget.load() == idx) learnTarget.store(-1);
+}
+juce::String ArcaneEclipseProcessor::midiLearningParamID() const {
+    int t = learnTarget.load();
+    return (t >= 0 && t < (int) learnParamIDs.size()) ? learnParamIDs[t] : juce::String();
+}
+int ArcaneEclipseProcessor::ccForParam(const juce::String& paramID) const {
+    int idx = indexOfParam(paramID);
+    if (idx < 0) return -1;
+    for (int c = 0; c < 128; ++c) if (ccMap[c].load() == idx) return c;
+    return -1;
+}
 
 juce::AudioProcessorEditor* ArcaneEclipseProcessor::createEditor() { return new ArcaneEclipseEditor(*this); }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new ArcaneEclipseProcessor(); }

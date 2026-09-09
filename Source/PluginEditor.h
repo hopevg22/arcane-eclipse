@@ -40,6 +40,7 @@ struct AEKnob {
     juce::Slider slider{juce::Slider::RotaryHorizontalVerticalDrag,juce::Slider::NoTextBox};
     juce::Label  nameLabel, valLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
+    juce::String paramID;
     void setup(juce::Component*,juce::AudioProcessorValueTreeState&,
                const juce::String& id,const juce::String& name,AELAF*);
     void place(int cx,int cy,int sz,bool showVal=true);
@@ -70,6 +71,18 @@ private:
 };
 
 // ── Main editor ───────────────────────────────────────────────────────────────
+// ── CreditsPanel ─────────────────────────────────────────────────────────────
+class CreditsPanel : public juce::Component
+{
+public:
+    CreditsPanel();
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override { setVisible(false); }
+private:
+    juce::TextButton closeBtn{"CLOSE"};
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CreditsPanel)
+};
+
 class ArcaneEclipseEditor : public juce::AudioProcessorEditor,
                              private juce::Timer
 {
@@ -78,6 +91,7 @@ public:
     ~ArcaneEclipseEditor() override;
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
     void resized() override;
 
 private:
@@ -98,6 +112,8 @@ private:
     void saveScene(int slot);
     void loadScene(int slot);
     void refreshSceneButtons();
+    void deleteScene(int slot);
+    void renameScene(int slot);
 
     // ── Layout ────────────────────────────────────────────────────────────────
     static constexpr int W=1200,H=823;
@@ -124,6 +140,12 @@ private:
     AEKnob kModRate,kModDepth,kModMix;
     AEKnob kDTime,kDFeedback,kDMix;
     AEKnob kRDecay,kRSize,kRMix;
+    std::vector<AEKnob*> allKnobs;
+    juce::String learningID;
+    std::unique_ptr<juce::AlertWindow> renameWindow;
+    CreditsPanel creditsPanel;
+    std::unique_ptr<juce::TextButton> helpBtn;
+    void showCredits();
 
     // Toggles
     juce::ToggleButton tbGate{""}, tbComp{""};

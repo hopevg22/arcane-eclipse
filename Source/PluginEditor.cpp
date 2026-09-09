@@ -28,6 +28,12 @@ static void haloText(juce::Graphics& g,const juce::String& s,juce::Font f,
     g.drawText(s,r,j,false);
 }
 
+// Bank+slot label: 0->"1A", 5->"2B", 19->"5D"
+static juce::String slotCode(int idx){
+    juce::juce_wchar c=(juce::juce_wchar)('A'+idx%4);
+    return juce::String(idx/4+1)+juce::String::charToString(c);
+}
+
 // ── AELAF ─────────────────────────────────────────────────────────────────────
 AELAF::AELAF(){
     setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff252532));
@@ -112,9 +118,73 @@ void AELAF::drawPopupMenuItem(juce::Graphics& g,const juce::Rectangle<int>& area
     g.drawText(text,area.reduced(8,0),juce::Justification::centredLeft);
 }
 
+
+// ── CreditsPanel ─────────────────────────────────────────────────────────────
+static const char* kCreditsText =
+    "ARCANE ECLIPSE v1.0.0\n"
+    "Developed by [Your Name]\n"
+    "Philippines\n\n"
+    "Built with open-source components:\n\n"
+    "JUCE Framework\n"
+    "  Raw Material Software Limited\n"
+    "  juce.com/legal/juce-8-licence\n\n"
+    "NeuralAudio\n"
+    "  Copyright (c) 2024 Mike Oliphant\n"
+    "  MIT License\n\n"
+    "Neural Amp Modeler Core\n"
+    "  Copyright (c) 2023 Steven Atkinson\n"
+    "  MIT License\n\n"
+    "RTNeural\n"
+    "  Copyright (c) 2020 jatinchowdhury18\n"
+    "  BSD 3-Clause License\n\n"
+    "math_approx\n"
+    "  Copyright (c) 2024 jatinchowdhury18\n"
+    "  BSD 3-Clause License\n\n"
+    "Eigen\n"
+    "  Eigen Contributors\n"
+    "  Mozilla Public License 2.0\n\n"
+    "nlohmann/json\n"
+    "  Copyright (c) 2013-2025 Niels Lohmann\n"
+    "  MIT License\n\n"
+    "VST is a registered trademark of\n"
+    "Steinberg Media Technologies GmbH.\n"
+    "VST3 SDK used under MIT License.\n\n"
+    "Full license texts bundled in\n"
+    "THIRD-PARTY-LICENSES.txt\n\n"
+    "Thank you for supporting indie\n"
+    "plugin development!\n\n"
+    "(Click anywhere to close)";
+
+CreditsPanel::CreditsPanel()
+{
+    setOpaque(false);
+    closeBtn.onClick=[this]{ setVisible(false); };
+    addAndMakeVisible(closeBtn);
+}
+void CreditsPanel::paint(juce::Graphics& g)
+{
+    auto b=getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xf0101018)); g.fillRoundedRectangle(b,12.f);
+    g.setColour(kPurple); g.drawRoundedRectangle(b.reduced(0.5f),12.f,1.8f);
+    g.setColour(kPurple.withAlpha(0.15f)); g.fillRoundedRectangle(b.withHeight(46),12.f);
+    g.setFont(juce::Font(15.f,juce::Font::bold)); g.setColour(kText);
+    g.drawText("CREDITS & LICENSES",getLocalBounds().withHeight(46),juce::Justification::centred);
+    g.setColour(kCardBd); g.drawHorizontalLine(46,16.f,(float)getWidth()-16);
+    juce::Rectangle<int> textArea(20,54,getWidth()-40,getHeight()-100);
+    g.setFont(juce::Font(10.5f)); g.setColour(juce::Colour(0xffcccce0));
+    juce::AttributedString as; as.setWordWrap(juce::AttributedString::byWord);
+    as.setJustification(juce::Justification::topLeft);
+    as.setColour(juce::Colour(0xffcccce0)); as.setFont(juce::Font(10.5f));
+    as.append(juce::String(kCreditsText));
+    juce::TextLayout tl; tl.createLayout(as,(float)textArea.getWidth());
+    tl.draw(g,textArea.toFloat());
+    closeBtn.setBounds(getWidth()/2-40,getHeight()-38,80,26);
+}
+
 // ── AEKnob ────────────────────────────────────────────────────────────────────
 void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
                     const juce::String& id,const juce::String& nm,AELAF* laf){
+    paramID=id;
     slider.setLookAndFeel(laf);
     slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setRotaryParameters(juce::MathConstants<float>::pi*1.25f,
@@ -181,6 +251,13 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     kRDecay   .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbDecay,  "DECAY",   &laf);
     kRSize    .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbSize,   "SIZE",    &laf);
     kRMix     .setup(this,p.apvts,ArcaneEclipseProcessor::idReverbMix,    "MIX",     &laf);
+
+    allKnobs = { &kInput,&kGate,&kComp,&kOutput,
+        &kGain,&kBass,&kMid,&kTreble,&kPresence,&kMaster,
+        &kODDrive,&kODTone,&kODLevel,&kModRate,&kModDepth,&kModMix,
+        &kDTime,&kDFeedback,&kDMix,&kRDecay,&kRSize,&kRMix };
+    for (auto* k : allKnobs) k->slider.addMouseListener(this, false);
+    for (int i=0;i<4;++i) sceneBtn[i].addMouseListener(this, false);
 
     for(auto* t:{&tbGate,&tbComp,&stompOD,&stompMod,&stompDelay,&stompReverb,&tbCab})
         addAndMakeVisible(*t);
@@ -256,6 +333,18 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     addAndMakeVisible(headerSave);
     headerSave.onClick=[this]{ int idx=activeScene<0?currentBank*4:activeScene; saveScene(idx); refreshSceneButtons(); repaint(); };
 
+    // ? icon -> credits panel
+    addAndMakeVisible(creditsPanel);
+    creditsPanel.setVisible(false);
+    // Invisible clickable region over the ? icon
+    helpBtn=std::make_unique<juce::TextButton>();
+    helpBtn->setButtonText("");
+    helpBtn->setColour(juce::TextButton::buttonColourId,juce::Colours::transparentBlack);
+    helpBtn->setColour(juce::TextButton::buttonOnColourId,juce::Colours::transparentBlack);
+    helpBtn->onClick=[this]{ showCredits(); };
+    addAndMakeVisible(*helpBtn);
+    helpBtn->setBounds(W-78,10,30,30);
+
     // Tuner toggle sits on the header tuning-fork icon
     tbTuner.setClickingTogglesState(true);
     tbTuner.onClick=[this]{
@@ -270,11 +359,79 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
 }
 
 ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);}
-void ArcaneEclipseEditor::timerCallback(){vuIn*=.92f;vuOut*=.92f;repaint();}
+void ArcaneEclipseEditor::timerCallback(){ learningID=proc.midiLearningParamID(); vuIn*=.92f; vuOut*=.92f; repaint(); }
+
+void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if(!e.mods.isPopupMenu()) return;
+    // Scene slot context menu (save / load / rename / delete)
+    for(int i=0;i<4;++i) if(e.eventComponent==&sceneBtn[i]){
+        int idx=currentBank*4+i; bool empty=scenes[idx].isEmpty();
+        juce::PopupMenu m;
+        m.addItem(1,"Save here");
+        m.addItem(2,"Load",!empty);
+        m.addItem(3,"Rename...",!empty);
+        m.addItem(4,"Delete",!empty);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&sceneBtn[i]),
+            [this,idx](int r){
+                if(r==1){ saveScene(idx); refreshSceneButtons(); repaint(); }
+                else if(r==2){ loadScene(idx); refreshSceneButtons(); repaint(); }
+                else if(r==3){ renameScene(idx); }
+                else if(r==4){ deleteScene(idx); }
+            });
+        return;
+    }
+    AEKnob* hit=nullptr;
+    for(auto* k:allKnobs) if(&k->slider==e.eventComponent){ hit=k; break; }
+    if(hit==nullptr) return;
+    juce::String pid=hit->paramID;
+    int cc=proc.ccForParam(pid);
+    juce::PopupMenu m;
+    m.addItem(1, cc<0 ? "MIDI Learn" : "MIDI Learn (re-assign)");
+    if(cc>=0) m.addItem(2, "Clear MIDI (CC "+juce::String(cc)+")");
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&hit->slider),
+        [this,pid](int r){
+            if(r==1){ proc.midiLearnStart(pid); learningID=pid; }
+            else if(r==2){ proc.midiLearnClear(pid); }
+            repaint();
+        });
+}
 
 void ArcaneEclipseEditor::refreshSceneButtons(){
-    for(int i=0;i<4;++i)
-        sceneBtn[i].setToggleState(activeScene==currentBank*4+i,juce::dontSendNotification);
+    for(int i=0;i<4;++i){
+        int idx=currentBank*4+i;
+        sceneBtn[i].setButtonText(slotCode(idx));
+        sceneBtn[i].setToggleState(activeScene==idx,juce::dontSendNotification);
+    }
+}
+void ArcaneEclipseEditor::showCredits()
+{
+    int pw=440, ph=540;
+    creditsPanel.setBounds((W-pw)/2,(H-ph)/2,pw,ph);
+    creditsPanel.setVisible(true);
+    creditsPanel.toFront(false);
+}
+void ArcaneEclipseEditor::deleteScene(int slot){
+    scenes[slot]=SceneData();
+    if(activeScene==slot) activeScene=-1;
+    refreshSceneButtons(); repaint();
+}
+void ArcaneEclipseEditor::renameScene(int slot){
+    if(scenes[slot].isEmpty()) return;
+    renameWindow=std::make_unique<juce::AlertWindow>("Rename Preset",
+        "New name for slot "+slotCode(slot)+":", juce::MessageBoxIconType::NoIcon);
+    renameWindow->addTextEditor("nm", scenes[slot].name);
+    renameWindow->addButton("OK",1,juce::KeyPress(juce::KeyPress::returnKey));
+    renameWindow->addButton("Cancel",0,juce::KeyPress(juce::KeyPress::escapeKey));
+    renameWindow->enterModalState(true,
+        juce::ModalCallbackFunction::create([this,slot](int r){
+            if(r==1 && renameWindow!=nullptr){
+                auto n=renameWindow->getTextEditorContents("nm").trim();
+                if(n.isNotEmpty() && n!="Empty") scenes[slot].name=n;
+            }
+            renameWindow.reset();
+            refreshSceneButtons(); repaint();
+        }), false);
 }
 
 // ── Scene save/load ───────────────────────────────────────────────────────────
@@ -282,7 +439,7 @@ void ArcaneEclipseEditor::saveScene(int slot){
     scenes[slot].namPath = curNAMPath;
     scenes[slot].irPath  = curIRPath;
     scenes[slot].params  = proc.apvts.copyState();
-    scenes[slot].name    = "Scene "+juce::String(slot+1);
+    if(scenes[slot].name=="Empty") scenes[slot].name = slotCode(slot);
     activeScene=slot;
 }
 void ArcaneEclipseEditor::loadScene(int slot){
@@ -392,6 +549,7 @@ void ArcaneEclipseEditor::resized()
     tbTuner.setBounds(W-150,10,30,30);
 
     tbCab.setBounds(-200,-200,1,1);
+    creditsPanel.setBounds((W-440)/2,(H-540)/2,440,540);
 }
 
 // ── paint ─────────────────────────────────────────────────────────────────────
@@ -408,7 +566,18 @@ void ArcaneEclipseEditor::paint(juce::Graphics& g)
     paintTopBar(g); paintStrip(g); paintChain(g); paintAmpHead(g);
     paintFXSection(g); paintCabSection(g); paintSceneBar(g); paintFooter(g);
 }
-void ArcaneEclipseEditor::paintOverChildren(juce::Graphics&){ /* card art carries its own borders */ }
+void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
+{
+    if(tunerVisible || learningID.isEmpty()) return;
+    for(auto* k:allKnobs) if(k->paramID==learningID && k->slider.isVisible()){
+        auto b=k->slider.getBounds().toFloat().expanded(3.f);
+        float t=(float)std::sin(juce::Time::getMillisecondCounter()*0.006)*0.5f+0.5f;
+        g.setColour(kPurple.withAlpha(0.35f+0.55f*t));
+        g.drawRoundedRectangle(b,b.getWidth()*0.5f,2.5f);
+        haloText(g,"LEARN",juce::Font(8.f,juce::Font::bold),kPurple,
+                 {k->slider.getX()-12,k->slider.getY()-13,k->slider.getWidth()+24,12},juce::Justification::centred);
+    }
+}
 
 void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
 {
@@ -432,10 +601,9 @@ void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
     g.setColour(kPurple);
     {juce::Path a;a.startNewSubPath(pbx+20.f,20.f);a.lineTo(pbx+13.f,25.f);a.lineTo(pbx+20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
     {juce::Path a;a.startNewSubPath(pbx+pbw-20.f,20.f);a.lineTo(pbx+pbw-13.f,25.f);a.lineTo(pbx+pbw-20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
-    juce::String pn = (activeScene>=0 && !scenes[activeScene].isEmpty())?scenes[activeScene].name:juce::String("Mystic Drive");
+    juce::String pn = (activeScene>=0 && !scenes[activeScene].isEmpty())?scenes[activeScene].name:"No Preset";
     haloText(g,pn,juce::Font(12.f,juce::Font::bold),kText,{pbx+30,12,pbw-60,20},juce::Justification::centred);
-    int dotActive=(activeScene<0?0:activeScene%4);
-    for(int i=0;i<5;++i){ g.setColour(i==dotActive?kPurple:juce::Colour(0x66bcbce2));
+    for(int i=0;i<5;++i){ g.setColour(i==currentBank?kPurple:juce::Colour(0x66bcbce2));
         g.fillEllipse(pbx+pbw/2-24+i*12-2.f,37.f,4.f,4.f);}
     // icons
     int ico[4]={W-150,W-114,W-78,W-42};
