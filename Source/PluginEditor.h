@@ -107,6 +107,7 @@ private:
     void paintFooter(juce::Graphics&);
     void paintVU(juce::Graphics&,juce::Rectangle<float>,float);
     void paintTuner(juce::Graphics&);
+    void setTunerVisible(bool v);
     juce::Rectangle<int> chainNodeBounds(int i) const;
 
     void saveScene(int slot);
@@ -143,6 +144,7 @@ private:
     std::vector<AEKnob*> allKnobs;
     juce::String learningID;
     std::unique_ptr<juce::AlertWindow> renameWindow;
+    std::unique_ptr<AEActivationDialog> activationDialog;
     CreditsPanel creditsPanel;
     std::unique_ptr<juce::TextButton> helpBtn;
     void showCredits();

@@ -347,22 +347,47 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
 
     // Tuner toggle sits on the header tuning-fork icon
     tbTuner.setClickingTogglesState(true);
-    tbTuner.onClick=[this]{
-        tunerVisible=tbTuner.getToggleState();
-        for(auto* c:getChildren()) if(c!=&tbTuner) c->setVisible(!tunerVisible);
-        repaint();
-    };
+    tbTuner.onClick=[this]{ setTunerVisible(tbTuner.getToggleState()); };
     addAndMakeVisible(tbTuner);
 
     refreshSceneButtons();
     startTimerHz(15);
+
+    // License check — show activation dialog if not licensed
+    if (!AELicenseManager::getInstance().loadFromDisk())
+    {
+        activationDialog = std::make_unique<AEActivationDialog>();
+        activationDialog->setBounds(0, 0, W, H);
+        activationDialog->onActivated = [this]{
+            activationDialog->setVisible(false);
+            activationDialog.reset();
+            repaint();
+        };
+        addAndMakeVisible(*activationDialog);
+        activationDialog->toFront(true);
+    }
 }
 
 ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);}
 void ArcaneEclipseEditor::timerCallback(){ learningID=proc.midiLearningParamID(); vuIn*=.92f; vuOut*=.92f; repaint(); }
 
+void ArcaneEclipseEditor::setTunerVisible(bool v)
+{
+    tunerVisible=v;
+    tbTuner.setToggleState(v,juce::dontSendNotification);
+    for(auto* c:getChildren())
+        if(c!=&tbTuner && c!=&creditsPanel)
+            c->setVisible(!v);
+    if(v) creditsPanel.setVisible(false);
+    repaint();
+}
 void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
 {
+    if(tunerVisible){
+        auto pos=e.getEventRelativeTo(this).getPosition();
+        if(juce::Rectangle<int>(W-46,12,30,30).contains(pos)) setTunerVisible(false);
+        return;
+    }
     if(!e.mods.isPopupMenu()) return;
     // Scene slot context menu (save / load / rename / delete)
     for(int i=0;i<4;++i) if(e.eventComponent==&sceneBtn[i]){
@@ -695,12 +720,24 @@ void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
     static juce::Image card = juce::ImageCache::getFromMemory(BinaryData::fxcard_png,BinaryData::fxcard_pngSize);
     int fxY=kTopH+kStripH+kAmpH, cardW=196, stepp=208;
     const char* titles[4]={"OVERDRIVE","MODULATION","DELAY","REVERB"};
+    bool on[4]={ stompOD.getToggleState(), stompMod.getToggleState(),
+                 stompDelay.getToggleState(), stompReverb.getToggleState() };
     for(int i=0;i<4;++i){
         int x=10+i*stepp;
         if(card.isValid())
             g.drawImage(card,x,fxY,cardW,kFXH,0,0,card.getWidth(),card.getHeight());
         haloText(g,titles[i],juce::Font(10.f,juce::Font::bold),juce::Colours::white,
                  {x,fxY+14,cardW,16},juce::Justification::centred);
+        // power state dot — cover the baked art dot, then draw on/off state
+        float dx=x+cardW*0.907f, dy=fxY+kFXH*0.068f;
+        g.setColour(juce::Colour(0xff191922)); g.fillEllipse(dx-12,dy-12,24,24);
+        if(on[i]){
+            g.setColour(kPurple.withAlpha(0.35f)); g.fillEllipse(dx-12,dy-12,24,24);
+            g.setColour(kPurple);                  g.fillEllipse(dx-7,dy-7,14,14);
+            g.setColour(juce::Colour(0xffe6d2ff)); g.fillEllipse(dx-3,dy-3,6,6);
+        } else {
+            g.setColour(juce::Colour(0xff45455c)); g.drawEllipse(dx-6,dy-6,12,12,1.4f);
+        }
     }
 }
 
@@ -766,13 +803,25 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
 
 void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)
 {
-    g.fillAll(kBg);
-    g.setColour(kSurf); g.fillRect(0,0,W,kTopH);
+    // Background (same as main panel) + dark overlay for readability
+    static juce::Image bg = juce::ImageCache::getFromMemory(BinaryData::background_png,BinaryData::background_pngSize);
+    if(bg.isValid()){
+        float sc=juce::jmax((float)W/bg.getWidth(),(float)H/bg.getHeight());
+        int dw=(int)(bg.getWidth()*sc), dh=(int)(bg.getHeight()*sc);
+        g.drawImage(bg,(W-dw)/2,(H-dh)/2,dw,dh,0,0,bg.getWidth(),bg.getHeight());
+    } else g.fillAll(kBg);
+    g.setColour(juce::Colour(0xc60a0a12)); g.fillRect(0,0,W,H);
+    g.setColour(juce::Colour(0xff0c0c13)); g.fillRect(0,0,W,kTopH);
     g.setColour(kPurple.withAlpha(.6f)); g.fillRect(0,kTopH-2,W,2);
     g.setFont(juce::Font(16.f,juce::Font::bold)); g.setColour(kText);
     g.drawText("CHROMATIC TUNER",0,0,W,kTopH,juce::Justification::centred);
-    g.setFont(juce::Font(9.f)); g.setColour(kMuted);
-    g.drawText("Press the fork icon to return",W-200,0,195,kTopH,juce::Justification::centredLeft);
+    // X close button (top-right)
+    juce::Rectangle<float> xr((float)(W-46),12.f,30.f,30.f);
+    g.setColour(juce::Colour(0xff212130)); g.fillRoundedRectangle(xr,5.f);
+    g.setColour(kPurple); g.drawRoundedRectangle(xr.reduced(0.5f),5.f,1.3f);
+    g.setColour(kText);
+    float xcx=xr.getCentreX(), xcy=xr.getCentreY();
+    g.drawLine(xcx-6,xcy-6,xcx+6,xcy+6,2.f); g.drawLine(xcx-6,xcy+6,xcx+6,xcy-6,2.f);
     int cx=W/2,cy=H/2-20;
     g.setColour(kCard); g.fillEllipse((float)(cx-180),(float)(cy-180),360.f,360.f);
     g.setColour(kCardBd); g.drawEllipse((float)(cx-180),(float)(cy-180),360.f,360.f,2.f);
@@ -800,5 +849,5 @@ void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)
     g.drawText(tunerHz>0?juce::String(tunerHz,1)+" Hz":"---",cx-80,cy+78,160,20,juce::Justification::centred);
     g.setColour(kCardBd); g.drawHorizontalLine(H-kFootH,0.f,(float)W);
     g.setFont(juce::Font(9.f)); g.setColour(kMuted);
-    g.drawText("Click the fork icon to close",0,H-kFootH,W,kFootH,juce::Justification::centred);
+    g.drawText("Click the X (top-right) or the fork icon to close",0,H-kFootH,W,kFootH,juce::Justification::centred);
 }
