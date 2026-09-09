@@ -167,7 +167,7 @@ void CreditsPanel::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xf0101018)); g.fillRoundedRectangle(b,12.f);
     g.setColour(kPurple); g.drawRoundedRectangle(b.reduced(0.5f),12.f,1.8f);
     g.setColour(kPurple.withAlpha(0.15f)); g.fillRoundedRectangle(b.withHeight(46),12.f);
-    g.setFont(juce::Font(15.f,juce::Font::bold)); g.setColour(kText);
+    g.setFont(juce::Font(15.f).boldened()); g.setColour(kText);
     g.drawText("CREDITS & LICENSES",getLocalBounds().withHeight(46),juce::Justification::centred);
     g.setColour(kCardBd); g.drawHorizontalLine(46,16.f,(float)getWidth()-16);
     juce::Rectangle<int> textArea(20,54,getWidth()-40,getHeight()-100);
@@ -197,7 +197,7 @@ void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
     att=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(ap,id,slider);
     nameLabel.setText(nm,juce::dontSendNotification);
     nameLabel.setJustificationType(juce::Justification::centred);
-    nameLabel.setFont(juce::Font(8.5f,juce::Font::bold));
+    nameLabel.setFont(juce::Font(8.5f).boldened());
     nameLabel.setColour(juce::Label::textColourId,juce::Colour(0xffbcbce2));
     nameLabel.setColour(juce::Label::backgroundColourId,juce::Colours::transparentBlack);
     nameLabel.setInterceptsMouseClicks(false,false);
@@ -599,7 +599,7 @@ void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
         float t=(float)std::sin(juce::Time::getMillisecondCounter()*0.006)*0.5f+0.5f;
         g.setColour(kPurple.withAlpha(0.35f+0.55f*t));
         g.drawRoundedRectangle(b,b.getWidth()*0.5f,2.5f);
-        haloText(g,"LEARN",juce::Font(8.f,juce::Font::bold),kPurple,
+        haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
                  {k->slider.getX()-12,k->slider.getY()-13,k->slider.getWidth()+24,12},juce::Justification::centred);
     }
 }
@@ -616,8 +616,8 @@ void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
     g.fillEllipse(lx-3,ly-3,6,6);
     g.setColour(kPurple.withAlpha(0.4f)); g.drawEllipse(lx-R,ly-R,2*R,2*R,1.f);
     // brand
-    haloText(g,"ARCANE",juce::Font(19.f,juce::Font::bold),kText,{46,10,110,30},juce::Justification::centredLeft);
-    haloText(g,"ECLIPSE",juce::Font(12.f,juce::Font::bold),kPurple,{150,12,80,26},juce::Justification::centredLeft);
+    haloText(g,"ARCANE",juce::Font(19.f).boldened(),kText,{46,10,110,30},juce::Justification::centredLeft);
+    haloText(g,"ECLIPSE",juce::Font(12.f).boldened(),kPurple,{150,12,80,26},juce::Justification::centredLeft);
     haloText(g,"v1.0.0",juce::Font(8.5f),kMuted,{228,14,60,24},juce::Justification::centredLeft);
     // preset box
     int pbx=430,pbw=300;
@@ -627,7 +627,7 @@ void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
     {juce::Path a;a.startNewSubPath(pbx+20.f,20.f);a.lineTo(pbx+13.f,25.f);a.lineTo(pbx+20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
     {juce::Path a;a.startNewSubPath(pbx+pbw-20.f,20.f);a.lineTo(pbx+pbw-13.f,25.f);a.lineTo(pbx+pbw-20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
     juce::String pn = (activeScene>=0 && !scenes[activeScene].isEmpty())?scenes[activeScene].name:"No Preset";
-    haloText(g,pn,juce::Font(12.f,juce::Font::bold),kText,{pbx+30,12,pbw-60,20},juce::Justification::centred);
+    haloText(g,pn,juce::Font(12.f).boldened(),kText,{pbx+30,12,pbw-60,20},juce::Justification::centred);
     for(int i=0;i<5;++i){ g.setColour(i==currentBank?kPurple:juce::Colour(0x66bcbce2));
         g.fillEllipse(pbx+pbw/2-24+i*12-2.f,37.f,4.f,4.f);}
     // icons
@@ -641,7 +641,7 @@ void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
     g.setColour(kMuted);
     g.drawRect(juce::Rectangle<float>((float)(ico[1]+7),20.f,7.f,10.f),1.4f);
     g.drawRect(juce::Rectangle<float>((float)(ico[1]+16),20.f,7.f,10.f),1.4f);
-    haloText(g,"?",juce::Font(14.f,juce::Font::bold),kMuted,{ico[2],10,30,30},juce::Justification::centred);
+    haloText(g,"?",juce::Font(14.f).boldened(),kMuted,{ico[2],10,30,30},juce::Justification::centred);
     g.setColour(kPurple); g.drawEllipse(ico[3]+10.f,19.f,10.f,10.f,1.4f); g.drawLine(ico[3]+15.f,17.f,ico[3]+15.f,24.f,1.4f);
 }
 
@@ -674,7 +674,7 @@ void ArcaneEclipseEditor::paintChain(juce::Graphics& g)
     for(int i=0;i<9;++i){
         auto nb=chainNodeBounds(i);
         paintChainNode(g,i,nb,act[i]);
-        haloText(g,kChainLabels[i],juce::Font(7.f,juce::Font::bold),act[i]?kPurple:kMuted,
+        haloText(g,kChainLabels[i],juce::Font(7.f).boldened(),act[i]?kPurple:kMuted,
                  {nb.getX()-3,nb.getBottom()+2,nb.getWidth()+6,10},juce::Justification::centred);
         if(i<8){
             auto nn=chainNodeBounds(i+1); bool glow=act[i]&&act[i+1];
@@ -726,7 +726,7 @@ void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
         int x=10+i*stepp;
         if(card.isValid())
             g.drawImage(card,x,fxY,cardW,kFXH,0,0,card.getWidth(),card.getHeight());
-        haloText(g,titles[i],juce::Font(10.f,juce::Font::bold),juce::Colours::white,
+        haloText(g,titles[i],juce::Font(10.f).boldened(),juce::Colours::white,
                  {x,fxY+14,cardW,16},juce::Justification::centred);
         // power state dot — cover the baked art dot, then draw on/off state
         float dx=x+cardW*0.907f, dy=fxY+kFXH*0.068f;
@@ -750,11 +750,11 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
     auto px=[&](float v){return cabX+(int)(v*kCabW/477.f);};
     auto py=[&](float v){return fxY+(int)(v*kFXH/355.f);};
     {int y0=py(74),y1=py(121);
-     haloText(g,"MODEL",juce::Font(8.f,juce::Font::bold),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
+     haloText(g,"MODEL",juce::Font(8.f).boldened(),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
      juce::String v=proc.isNAMLoaded()?proc.getLoadedNAMName():juce::String("No model loaded");
      haloText(g,v,juce::Font(9.f),juce::Colour(0xffd4d4ee),{px(258),y0+(y1-y0)/2-2,px(430)-px(258),14},juce::Justification::centredLeft);}
     {int y0=py(134),y1=py(175);
-     haloText(g,"IR",juce::Font(8.f,juce::Font::bold),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
+     haloText(g,"IR",juce::Font(8.f).boldened(),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
      juce::String v=proc.isIRLoaded()?proc.getLoadedIRName():juce::String("No IR loaded");
      haloText(g,v,juce::Font(9.f),juce::Colour(0xffd4d4ee),{px(258),y0+(y1-y0)/2-2,px(430)-px(258),14},juce::Justification::centredLeft);}
     // arcane emblem in slot 3
@@ -783,13 +783,13 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
     hp.addCentredArc(24.f,(float)(Y+17),8.f,7.f,0.f,3.3f,6.22f,true);
     g.strokePath(hp,juce::PathStrokeType(2.f));
     g.fillEllipse(14.f,(float)(Y+20),5.f,8.f); g.fillEllipse(27.f,(float)(Y+20),5.f,8.f);
-    g.setFont(juce::Font(8.f,juce::Font::bold)); g.setColour(kMuted);
+    g.setFont(juce::Font(8.f).boldened()); g.setColour(kMuted);
     g.drawText("INPUT MONITOR",36,Y+9,105,16,juce::Justification::centredLeft);
     g.setColour(kPurple); g.fillRoundedRectangle(142.f,(float)(Y+10),28.f,14.f,3.f);
-    g.setFont(juce::Font(7.f,juce::Font::bold)); g.setColour(juce::Colours::white);
+    g.setFont(juce::Font(7.f).boldened()); g.setColour(juce::Colours::white);
     g.drawText("ON",142,Y+10,28,14,juce::Justification::centred);
     g.setColour(kPurple); g.fillRoundedRectangle((float)(W/2-30),(float)(Y+6),58.f,22.f,4.f);
-    g.setFont(juce::Font(9.f,juce::Font::bold)); g.setColour(juce::Colours::white);
+    g.setFont(juce::Font(9.f).boldened()); g.setColour(juce::Colours::white);
     g.drawText("RIG",W/2-30,Y+6,58,22,juce::Justification::centred);
     g.setColour(kMuted); g.drawText("FX",W/2+36,Y+9,24,16,juce::Justification::centred);
     g.setColour(proc.isNAMLoaded()?kPurple:kMuted.withAlpha(.3f));
@@ -813,7 +813,7 @@ void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)
     g.setColour(juce::Colour(0xc60a0a12)); g.fillRect(0,0,W,H);
     g.setColour(juce::Colour(0xff0c0c13)); g.fillRect(0,0,W,kTopH);
     g.setColour(kPurple.withAlpha(.6f)); g.fillRect(0,kTopH-2,W,2);
-    g.setFont(juce::Font(16.f,juce::Font::bold)); g.setColour(kText);
+    g.setFont(juce::Font(16.f).boldened()); g.setColour(kText);
     g.drawText("CHROMATIC TUNER",0,0,W,kTopH,juce::Justification::centred);
     // X close button (top-right)
     juce::Rectangle<float> xr((float)(W-46),12.f,30.f,30.f);
@@ -833,7 +833,7 @@ void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)
         float nx=cx+160.f*std::sin(angle),ny=cy-160.f*std::cos(angle);
         g.setColour(inTune?kGreen:kPurple); g.drawLine((float)cx,(float)cy,nx,ny,3.f);
     }
-    g.setFont(juce::Font("Georgia",72.f,juce::Font::bold));
+    g.setFont(juce::Font(juce::FontOptions().withName("Georgia").withHeight(72.f).withStyle("Bold")));
     g.setColour(inTune?kGreen:kText);
     g.drawText(tunerHz>0?tunerNote:"--",cx-80,cy-50,160,100,juce::Justification::centred);
     g.setFont(juce::Font(14.f)); g.setColour(kMuted);
