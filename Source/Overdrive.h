@@ -3,11 +3,15 @@
 #include <cmath>
 
 /*
-    TubeScreamerDrive — a simplified Tube Screamer-inspired overdrive.
+    TubeScreamerDrive — a gentle Tube Screamer-style overdrive / booster.
+
     Signal path:
-        input → pre-gain → soft clipper (tanh) → tone filter → output level
-    The tone control is a one-pole shelving filter that blends between
-    a darker and brighter character, matching the real pedal's tone stack.
+        input → moderate pre-gain → soft clip (tanh) → tone tilt → output level
+
+    IMPORTANT: this is a BOOSTER into the amp, not a fuzz. The pre-gain is kept
+    modest (1x..9x) so it pushes the NAM amp harder while preserving pick
+    dynamics and the amp's character — rather than square-waving the signal
+    and erasing the amp tone.
 */
 class TubeScreamerDrive
 {
@@ -15,24 +19,25 @@ public:
     void prepare (double sr, int /*block*/)
     {
         sampleRate = sr;
-        toneState[0] = toneState[1] = 0.0f;
+        lpState[0] = lpState[1] = 0.0f;
     }
 
-    void reset() { toneState[0] = toneState[1] = 0.0f; }
+    void reset() { lpState[0] = lpState[1] = 0.0f; }
 
-    // drive: 0..1  tone: 0..1 (dark..bright)  level: 0..1 output level
+    // drive: 0..1   tone: 0..1 (dark..bright)   level: 0..1 output
     void setParameters (float drive, float tone, float level)
     {
-        // Drive maps to pre-gain: 1x .. 50x (approx TS range)
-        preGain = 1.0f + drive * 49.0f;
+        // Gentle booster range — NOT a fuzz. 1x .. 9x into a soft clipper.
+        preGain = 1.0f + juce::jlimit (0.0f, 1.0f, drive) * 8.0f;
 
-        // Tone is a one-pole shelving crossfade: 0=dark, 1=bright
-        // We model it as blending a lowpassed signal with the direct signal
-        float freq = 500.0f + tone * 3000.0f;      // 500Hz..3500Hz cutoff
-        float rc = 1.0f / (2.0f * juce::MathConstants<float>::pi * (float) sampleRate * freq);
-        toneCoeff = rc / (rc + 1.0f / (float) sampleRate);
+        // Tone: one-pole lowpass cutoff 700Hz(dark) .. 5000Hz(bright)
+        float freq = 700.0f + juce::jlimit (0.0f, 1.0f, tone) * 4300.0f;
+        lpCoeff  = std::exp (-2.0f * juce::MathConstants<float>::pi * freq / (float) sampleRate);
+        lpCoeff  = juce::jlimit (0.0f, 0.999f, lpCoeff);
+        toneParam = juce::jlimit (0.0f, 1.0f, tone);
 
-        this->level = level * 0.5f; // scale output to unity-ish range
+        // Output ~unity at level 0.7 so it boosts, not buries or silences
+        outLevel = 0.4f + juce::jlimit (0.0f, 1.0f, level) * 0.9f; // 0.4 .. 1.3
     }
 
     void processBlock (juce::AudioBuffer<float>& buffer)
@@ -45,26 +50,23 @@ public:
             auto* data = buffer.getWritePointer (ch);
             for (int n = 0; n < numSamples; ++n)
             {
-                // Pre-gain + soft clip
-                float x = data[n] * preGain;
-                x = std::tanh (x);             // smooth, asymptote at ±1
+                // Soft clip — small signals boost linearly, loud ones round off
+                float x = std::tanh (data[n] * preGain);
 
-                // One-pole tone filter: blend bright (direct) and dark (LP)
-                toneState[ch] += toneCoeff * (x - toneState[ch]);
-                float bright = x - toneState[ch];      // high shelf contribution
-                float warm   = toneState[ch];           // low shelf contribution
-                float toneMix = juce::jmap (toneCoeff, 0.0f, 1.0f, 0.0f, 1.0f);
-                x = warm * (1.0f - toneMix) + bright * toneMix;
+                // Tone tilt: blend a lowpassed (dark) copy with the direct (bright) one
+                lpState[ch] += (1.0f - lpCoeff) * (x - lpState[ch]);
+                float shaped = lpState[ch] + toneParam * (x - lpState[ch]);
 
-                data[n] = x * level;
+                data[n] = shaped * outLevel;
             }
         }
     }
 
 private:
-    double sampleRate = 44100.0;
+    double sampleRate = 48000.0;
     float  preGain    = 1.0f;
-    float  toneCoeff  = 0.5f;
-    float  level      = 0.5f;
-    float  toneState[2] = { 0.0f, 0.0f };
+    float  lpCoeff    = 0.5f;
+    float  toneParam  = 0.5f;
+    float  outLevel   = 1.0f;
+    float  lpState[2] = { 0.0f, 0.0f };
 };

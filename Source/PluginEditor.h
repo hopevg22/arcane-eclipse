@@ -143,6 +143,8 @@ private:
     AEKnob kDTime,kDFeedback,kDMix;
     AEKnob kRDecay,kRSize,kRMix;
     std::vector<AEKnob*> allKnobs;
+    struct NodeLearn { juce::Component* comp; juce::String pid; int nodeIdx; };
+    std::vector<NodeLearn> nodeLearns;
     juce::String learningID;
     std::unique_ptr<juce::AlertWindow> renameWindow;
     std::unique_ptr<AEActivationDialog> activationDialog;

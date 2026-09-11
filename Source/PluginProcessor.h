@@ -51,6 +51,10 @@ public:
     juce::String midiLearningParamID() const;
     int  ccForParam(const juce::String& paramID) const;
 
+    // Tuner — the editor sets tunerActive when open; processor fills tunerFreq
+    std::atomic<bool>  tunerActive { false };
+    std::atomic<float> tunerFreq   { 0.f };
+
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -118,13 +122,20 @@ private:
     juce::dsp::IIR::Filter<float> bassFilter[2], midFilter[2], trebleFilter[2], presenceFilter[2];
     void updateEQ();
     float gateEnvelope = 0.f;
+    float dcX1[2] = {0.f,0.f}, dcY1[2] = {0.f,0.f};  // DC blocker state
 
     // MIDI learn state
     std::vector<juce::String> learnParamIDs;
     std::vector<juce::RangedAudioParameter*> learnParamPtrs;
     std::atomic<int> ccMap[128];
     std::atomic<int> learnTarget { -1 };
+    std::vector<bool> learnIsToggle;        // parallel to learnParamIDs
+    int prevCCVal[128] = { 0 };             // for footswitch rising-edge detection
     int indexOfParam(const juce::String& id) const;
+    // Tuner
+    std::vector<float> tunerBuf;
+    int tunerFill = 0;
+    static float detectPitch(const float* buf, int n, double sr);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseProcessor)
 };

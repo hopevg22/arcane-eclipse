@@ -1,10 +1,9 @@
-# ── Private license tooling — NEVER commit these ──
+# Private license tooling — NEVER commit
 tools/
 *.pem
 serial_counter.json
 issued_licenses.csv
-
-# ── Build artifacts ──
+# Build artifacts
 build/
 Builds/
 *.vst3

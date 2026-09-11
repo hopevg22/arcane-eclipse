@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include <cmath>
 #include "PluginEditor.h"
 
 ArcaneEclipseProcessor::ArcaneEclipseProcessor()
@@ -13,10 +14,20 @@ ArcaneEclipseProcessor::ArcaneEclipseProcessor()
         idODDrive, idODTone, idODLevel,
         idModRate, idModDepth, idModMix,
         idDelayTime, idDelayFeedback, idDelayMix,
-        idReverbDecay, idReverbSize, idReverbMix
+        idReverbDecay, idReverbSize, idReverbMix,
+        // on/off toggles (for footswitch MIDI learn)
+        idGateOn, idCompOn, idODOn, idModOn, idDelayOn, idReverbOn
     };
     for (auto& id : learnParamIDs) learnParamPtrs.push_back(apvts.getParameter(id));
+    learnIsToggle.assign(learnParamIDs.size(), false);
+    for (int i = 0; i < (int) learnParamIDs.size(); ++i) {
+        auto& id = learnParamIDs[i];
+        if (id == idGateOn || id == idCompOn || id == idODOn ||
+            id == idModOn  || id == idDelayOn || id == idReverbOn)
+            learnIsToggle[i] = true;
+    }
     for (auto& c : ccMap) c.store(-1);
+    for (auto& v : prevCCVal) v = 0;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::createParameterLayout()
@@ -50,7 +61,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idODLevel, "OD Level", Range(0.f,1.f,.01f),.7f));
 
     p.push_back(std::make_unique<juce::AudioParameterBool> (idModOn,    "Mod On",   false));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(idModRate,  "Mod Rate", Range(.1f,10.f,.1f),1.f,"Hz"));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idModRate,  "Mod Rate", Range(.1f,4.f,.05f),1.f,"Hz"));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idModDepth, "Mod Depth",Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idModMix,   "Mod Mix",  Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idModType,  "Mod Type", 0, 2, 0));
@@ -87,6 +98,7 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     monoBuf       .assign((size_t)(samplesPerBlock + 32),     0.f);
     namOutBuf     .assign((size_t)(samplesPerBlock + 32),     0.f);
     resamplerIn.reset(); resamplerOut.reset();
+    tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
     compressor.prepare(sampleRate, samplesPerBlock);
     overdrive.prepare(sampleRate, samplesPerBlock);
     modulation.prepare(sampleRate, samplesPerBlock);
@@ -152,12 +164,36 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const auto msg = meta.getMessage();
         if (msg.isController()) {
             const int cc = msg.getControllerNumber();
+            const int val = msg.getControllerValue();
             const int lt = learnTarget.load();
             if (lt >= 0) { ccMap[cc].store(lt); learnTarget.store(-1); }
             else {
                 const int pi = ccMap[cc].load();
-                if (pi >= 0 && pi < (int) learnParamPtrs.size() && learnParamPtrs[pi] != nullptr)
-                    learnParamPtrs[pi]->setValueNotifyingHost(msg.getControllerValue() / 127.0f);
+                if (pi >= 0 && pi < (int) learnParamPtrs.size() && learnParamPtrs[pi] != nullptr) {
+                    if (pi < (int) learnIsToggle.size() && learnIsToggle[pi]) {
+                        // Footswitch: flip the on/off state on a rising edge (press)
+                        if (prevCCVal[cc] < 64 && val >= 64) {
+                            float cur = learnParamPtrs[pi]->getValue();
+                            learnParamPtrs[pi]->setValueNotifyingHost(cur < 0.5f ? 1.0f : 0.0f);
+                        }
+                    } else {
+                        learnParamPtrs[pi]->setValueNotifyingHost(val / 127.0f);
+                    }
+                }
+            }
+            prevCCVal[cc] = val;
+        }
+    }
+
+    // 0. TUNER — feed the pitch detector from the dry input (only when open)
+    if (tunerActive.load() && ! tunerBuf.empty()) {
+        auto* in = buffer.getReadPointer(0);
+        for (int n = 0; n < numSamples; ++n) {
+            float smp = numCh > 1 ? 0.5f * (in[n] + buffer.getReadPointer(1)[n]) : in[n];
+            tunerBuf[(size_t) tunerFill++] = smp;
+            if (tunerFill >= (int) tunerBuf.size()) {
+                tunerFreq.store(detectPitch(tunerBuf.data(), (int) tunerBuf.size(), currentSampleRate));
+                tunerFill = 0;
             }
         }
     }
@@ -282,6 +318,19 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         }
     }
 
+    // 6b. DC BLOCKER — strip any DC the amp model introduces. Without this,
+    //     DC slowly accumulates in the delay/reverb feedback loops and runs
+    //     the level away into loud clipping after a few minutes.
+    for (int ch = 0; ch < juce::jmin(numCh,2); ++ch) {
+        auto* d = buffer.getWritePointer(ch);
+        for (int n = 0; n < numSamples; ++n) {
+            float x = d[n];
+            float y = x - dcX1[ch] + 0.9975f * dcY1[ch];
+            dcX1[ch] = x; dcY1[ch] = y;
+            d[n] = y;
+        }
+    }
+
     // 7. AMP EQ — tone shaping post-NAM
     updateEQ();
     for (int n = 0; n < numSamples; ++n)
@@ -336,6 +385,17 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 13. OUTPUT GAIN
     buffer.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idOutputGain)->load()));
+
+    // 14. SAFETY — sanitise NaN/Inf and hard-limit runaway levels so a bad
+    //     value can never blast the speakers.
+    for (int ch = 0; ch < numCh; ++ch) {
+        auto* d = buffer.getWritePointer(ch);
+        for (int n = 0; n < numSamples; ++n) {
+            float v = d[n];
+            if (!std::isfinite(v)) v = 0.f;
+            d[n] = juce::jlimit(-2.0f, 2.0f, v);
+        }
+    }
 }
 
 bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file)
@@ -347,6 +407,7 @@ bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file)
         std::unique_ptr<NeuralAudio::NeuralModel> model(raw);
         { const juce::ScopedLock lock(getCallbackLock()); namModel = std::move(model); loadedNAMName = file.getFileNameWithoutExtension(); }
         resamplerIn.reset(); resamplerOut.reset();
+    tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
         std::fill(resampleBufIn.begin(),  resampleBufIn.end(),  0.f);
         std::fill(resampleBufOut.begin(), resampleBufOut.end(), 0.f);
         std::fill(monoBuf.begin(),        monoBuf.end(),        0.f);
@@ -420,6 +481,40 @@ int ArcaneEclipseProcessor::ccForParam(const juce::String& paramID) const {
     if (idx < 0) return -1;
     for (int c = 0; c < 128; ++c) if (ccMap[c].load() == idx) return c;
     return -1;
+}
+
+// ── Tuner pitch detection (autocorrelation) ──────────────────────────────────
+float ArcaneEclipseProcessor::detectPitch(const float* buf, int n, double sr)
+{
+    // Level gate — ignore silence/very quiet input
+    double energy = 0.0;
+    for (int i = 0; i < n; ++i) energy += (double) buf[i] * buf[i];
+    double rms = std::sqrt(energy / (double) n);
+    if (rms < 0.004 || energy <= 0.0) return 0.0f;
+
+    const int minLag = juce::jmax(2, (int) (sr / 1200.0)); // up to ~1200 Hz
+    const int maxLag = juce::jmin(n / 2, (int) (sr / 60.0)); // down to ~60 Hz
+    if (maxLag <= minLag) return 0.0f;
+
+    double bestCorr = 0.0; int bestLag = -1;
+    for (int lag = minLag; lag <= maxLag; ++lag) {
+        double corr = 0.0;
+        for (int i = 0; i < n - lag; ++i) corr += (double) buf[i] * buf[i + lag];
+        if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
+    }
+    if (bestLag < 1) return 0.0f;
+    if (bestCorr / energy < 0.30) return 0.0f; // not periodic enough
+
+    // Parabolic interpolation for a finer period estimate
+    double lag = bestLag;
+    if (bestLag > minLag && bestLag < maxLag) {
+        double c0 = 0.0, c2 = 0.0;
+        for (int i = 0; i < n - (bestLag - 1); ++i) c0 += (double) buf[i] * buf[i + bestLag - 1];
+        for (int i = 0; i < n - (bestLag + 1); ++i) c2 += (double) buf[i] * buf[i + bestLag + 1];
+        double denom = c0 - 2.0 * bestCorr + c2;
+        if (std::abs(denom) > 1e-12) lag = bestLag + 0.5 * (c0 - c2) / denom;
+    }
+    return (float) (sr / lag);
 }
 
 juce::AudioProcessorEditor* ArcaneEclipseProcessor::createEditor() { return new ArcaneEclipseEditor(*this); }

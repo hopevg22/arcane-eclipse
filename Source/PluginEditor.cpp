@@ -198,14 +198,14 @@ void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
     nameLabel.setText(nm,juce::dontSendNotification);
     nameLabel.setJustificationType(juce::Justification::centred);
     nameLabel.setFont(juce::Font(8.5f).boldened());
-    nameLabel.setColour(juce::Label::textColourId,juce::Colour(0xffbcbce2));
+    nameLabel.setColour(juce::Label::textColourId,juce::Colours::white);
     nameLabel.setColour(juce::Label::backgroundColourId,juce::Colours::transparentBlack);
     nameLabel.setInterceptsMouseClicks(false,false);
     nameLabel.setOpaque(false);
     p->addAndMakeVisible(nameLabel);
     valLabel.setJustificationType(juce::Justification::centred);
     valLabel.setFont(juce::Font(9.f));
-    valLabel.setColour(juce::Label::textColourId,juce::Colour(0xffc6a6ff));
+    valLabel.setColour(juce::Label::textColourId,juce::Colours::white);
     valLabel.setColour(juce::Label::backgroundColourId,juce::Colours::transparentBlack);
     valLabel.setInterceptsMouseClicks(false,false);
     valLabel.setOpaque(false);
@@ -258,6 +258,16 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
         &kDTime,&kDFeedback,&kDMix,&kRDecay,&kRSize,&kRMix };
     for (auto* k : allKnobs) k->slider.addMouseListener(this, false);
     for (int i=0;i<4;++i) sceneBtn[i].addMouseListener(this, false);
+
+    nodeLearns = {
+        {&tbGate,      ArcaneEclipseProcessor::idGateOn,   0},
+        {&tbComp,      ArcaneEclipseProcessor::idCompOn,   1},
+        {&stompOD,     ArcaneEclipseProcessor::idODOn,     2},
+        {&stompMod,    ArcaneEclipseProcessor::idModOn,    6},
+        {&stompDelay,  ArcaneEclipseProcessor::idDelayOn,  7},
+        {&stompReverb, ArcaneEclipseProcessor::idReverbOn, 8},
+    };
+    for (auto& nl : nodeLearns) nl.comp->addMouseListener(this, false);
 
     for(auto* t:{&tbGate,&tbComp,&stompOD,&stompMod,&stompDelay,&stompReverb,&tbCab})
         addAndMakeVisible(*t);
@@ -331,7 +341,30 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     headerSave.setColour(juce::TextButton::buttonColourId,kPurple);
     headerSave.setColour(juce::TextButton::textColourOffId,juce::Colours::white);
     addAndMakeVisible(headerSave);
-    headerSave.onClick=[this]{ int idx=activeScene<0?currentBank*4:activeScene; saveScene(idx); refreshSceneButtons(); repaint(); };
+    headerSave.onClick=[this]{
+        juce::PopupMenu m;
+        m.addSectionHeader("Save current settings to:");
+        for (int bank=0; bank<5; ++bank) {
+            juce::PopupMenu bm;
+            for (int slot=0; slot<4; ++slot) {
+                int idx = bank*4+slot;
+                juce::String lbl = slotCode(idx);
+                if (!scenes[idx].isEmpty()) lbl += "  (" + scenes[idx].name + ")";
+                bm.addItem(idx+1, lbl);
+            }
+            m.addSubMenu("Bank " + juce::String(bank+1), bm);
+        }
+        m.addSeparator();
+        bool haveActive = (activeScene>=0 && !scenes[activeScene].isEmpty());
+        m.addItem(1001, "Rename current preset...", haveActive);
+        m.addItem(1002, "Delete current preset",    haveActive);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&headerSave),
+            [this](int r){
+                if (r>=1 && r<=20) { saveScene(r-1); currentBank=(r-1)/4; refreshSceneButtons(); repaint(); }
+                else if (r==1001) { renameScene(activeScene); }
+                else if (r==1002) { deleteScene(activeScene); }
+            });
+    };
 
     // ? icon -> credits panel
     addAndMakeVisible(creditsPanel);
@@ -369,11 +402,29 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
 }
 
 ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);}
-void ArcaneEclipseEditor::timerCallback(){ learningID=proc.midiLearningParamID(); vuIn*=.92f; vuOut*=.92f; repaint(); }
+void ArcaneEclipseEditor::timerCallback()
+{
+    learningID = proc.midiLearningParamID();
+    if (tunerVisible) {
+        float hz = proc.tunerFreq.load();
+        if (hz > 20.f) {
+            double midi = 69.0 + 12.0 * std::log2((double) hz / 440.0);
+            int nearest = (int) std::lround(midi);
+            tunerCents = (float) ((midi - nearest) * 100.0);
+            static const char* nm[12] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+            int nn = ((nearest % 12) + 12) % 12, oct = nearest / 12 - 1;
+            tunerNote = juce::String(nm[nn]) + juce::String(oct);
+            tunerHz = hz;
+        } else { tunerHz = 0.f; tunerNote = {}; tunerCents = 0.f; }
+    }
+    vuIn *= .92f; vuOut *= .92f; repaint();
+}
 
 void ArcaneEclipseEditor::setTunerVisible(bool v)
 {
     tunerVisible=v;
+    proc.tunerActive.store(v);
+    if(!v){ proc.tunerFreq.store(0.f); tunerHz=0.f; tunerNote={}; tunerCents=0.f; }
     tbTuner.setToggleState(v,juce::dontSendNotification);
     for(auto* c:getChildren())
         if(c!=&tbTuner && c!=&creditsPanel)
@@ -403,6 +454,20 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
                 else if(r==2){ loadScene(idx); refreshSceneButtons(); repaint(); }
                 else if(r==3){ renameScene(idx); }
                 else if(r==4){ deleteScene(idx); }
+            });
+        return;
+    }
+    // Chain-node footswitch MIDI learn
+    for(auto& nl:nodeLearns) if(e.eventComponent==nl.comp){
+        juce::String pid=nl.pid; int cc=proc.ccForParam(pid);
+        juce::PopupMenu m;
+        m.addItem(1, cc<0 ? "MIDI Learn (footswitch)" : "MIDI Learn (re-assign)");
+        if(cc>=0) m.addItem(2, "Clear MIDI (CC "+juce::String(cc)+")");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(nl.comp),
+            [this,pid](int r){
+                if(r==1){ proc.midiLearnStart(pid); learningID=pid; }
+                else if(r==2){ proc.midiLearnClear(pid); }
+                repaint();
             });
         return;
     }
@@ -594,13 +659,20 @@ void ArcaneEclipseEditor::paint(juce::Graphics& g)
 void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
 {
     if(tunerVisible || learningID.isEmpty()) return;
+    float pulse=(float)std::sin(juce::Time::getMillisecondCounter()*0.006)*0.5f+0.5f;
     for(auto* k:allKnobs) if(k->paramID==learningID && k->slider.isVisible()){
         auto b=k->slider.getBounds().toFloat().expanded(3.f);
-        float t=(float)std::sin(juce::Time::getMillisecondCounter()*0.006)*0.5f+0.5f;
-        g.setColour(kPurple.withAlpha(0.35f+0.55f*t));
+        g.setColour(kPurple.withAlpha(0.35f+0.55f*pulse));
         g.drawRoundedRectangle(b,b.getWidth()*0.5f,2.5f);
         haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
                  {k->slider.getX()-12,k->slider.getY()-13,k->slider.getWidth()+24,12},juce::Justification::centred);
+    }
+    for(auto& nl:nodeLearns) if(nl.pid==learningID){
+        auto nb=chainNodeBounds(nl.nodeIdx);
+        g.setColour(kPurple.withAlpha(0.35f+0.55f*pulse));
+        g.drawRoundedRectangle(nb.toFloat().expanded(2.f),8.f,2.5f);
+        haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
+                 {nb.getX()-8,nb.getY()-13,nb.getWidth()+16,12},juce::Justification::centred);
     }
 }
 
@@ -674,7 +746,7 @@ void ArcaneEclipseEditor::paintChain(juce::Graphics& g)
     for(int i=0;i<9;++i){
         auto nb=chainNodeBounds(i);
         paintChainNode(g,i,nb,act[i]);
-        haloText(g,kChainLabels[i],juce::Font(7.f).boldened(),act[i]?kPurple:kMuted,
+        haloText(g,kChainLabels[i],juce::Font(7.f).boldened(),juce::Colours::white,
                  {nb.getX()-3,nb.getBottom()+2,nb.getWidth()+6,10},juce::Justification::centred);
         if(i<8){
             auto nn=chainNodeBounds(i+1); bool glow=act[i]&&act[i+1];
