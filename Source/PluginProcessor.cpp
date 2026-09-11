@@ -141,6 +141,9 @@ void ArcaneEclipseProcessor::updateEQ()
 
 void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    // License gate: silence all audio if not activated
+    if (!AELicenseManager::getInstance().isActivated())
+    { buffer.clear(); return; }
     juce::ScopedNoDenormals noDenormals;
     int numSamples = buffer.getNumSamples(), numCh = buffer.getNumChannels();
 

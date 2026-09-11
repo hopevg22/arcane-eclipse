@@ -55,12 +55,6 @@ AEActivationDialog::AEActivationDialog()
     activateBtn.onClick=[this]{ attemptActivation(); };
     addAndMakeVisible(activateBtn);
 
-    exitBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff252532));
-    exitBtn.setColour(juce::TextButton::textColourOffId, kActMuted);
-    exitBtn.onClick=[]{
-        juce::JUCEApplicationBase::quit();
-    };
-    addAndMakeVisible(exitBtn);
 }
 
 void AEActivationDialog::resized()
@@ -80,8 +74,7 @@ void AEActivationDialog::resized()
     field(codeLbl,  codeEdit);
 
     errorLabel.setBounds(fx, y, fw, 16); y+=22;
-    activateBtn.setBounds(cx-90, y, 110, 34);
-    exitBtn    .setBounds(cx+6,  y, 84,  34);
+    activateBtn.setBounds(cx-70, y, 140, 36);
 }
 
 void AEActivationDialog::paint(juce::Graphics& g)

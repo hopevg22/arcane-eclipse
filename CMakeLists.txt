@@ -44,6 +44,10 @@ juce_add_plugin(ArcaneEclipse
 target_sources(ArcaneEclipse PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
+    Source/AELicense.h
+    Source/AELicense.cpp
+    Source/AEActivationDialog.h
+    Source/AEActivationDialog.cpp
     Source/Compressor.h
     Source/Overdrive.h
     Source/Modulation.h
@@ -82,6 +86,7 @@ target_link_libraries(ArcaneEclipse PRIVATE
     ArcaneEclipseAssets
     juce::juce_audio_utils
     juce::juce_dsp
+    juce::juce_cryptography
     NeuralAudio
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
