@@ -88,8 +88,10 @@ public:
         float rt60 = 0.15f + decay * 3.85f;             // 0.15s .. 4.0s
         float dampCoeff = juce::jmap (tone, 0.0f, 1.0f, 0.85f, 0.15f); // dark->bright
         float apGain = juce::jmap (diffusion, 0.0f, 1.0f, 0.2f, 0.7f);
-        float modDepthSamples = modDepth * 0.5f;  // was 6.0f — reduced to eliminate synthetic wobble
-        float modRateHz = 0.15f;                   // was 0.3f — slower and subtler
+        // Always-on subtle modulation de-correlates the FDN modes and turns a
+        // metallic/robotic ring into a smooth, natural tail.
+        float modDepthSamples = 1.5f + modDepth * 3.0f;   // ~1.5 .. 4.5 samples
+        float modRateHz = 0.5f;
 
         preDelay.setDelay ((float) (preDelayMsParam * 0.001 * sampleRate));
 

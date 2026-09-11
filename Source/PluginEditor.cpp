@@ -279,15 +279,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     attReverb=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbOn,stompReverb);
     attCab   =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idCabBypass,tbCab);
 
-    comboMod.addItem("Analog Chorus",1); comboMod.addItem("Flanger",2); comboMod.addItem("Tremolo",3);
-    comboMod.setSelectedId(1); addAndMakeVisible(comboMod);
-    attModType=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts,ArcaneEclipseProcessor::idModType,comboMod);
-    comboDly.addItem("1/4",1); comboDly.addItem("1/4D",2); comboDly.addItem("1/8",3); comboDly.addItem("1/2",4);
-    comboDly.setSelectedId(1); addAndMakeVisible(comboDly);
-    attDlyType=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts,ArcaneEclipseProcessor::idDelayType,comboDly);
-    comboRvb.addItem("Plate",1); comboRvb.addItem("Hall",2); comboRvb.addItem("Room",3); comboRvb.addItem("Spring",4);
-    comboRvb.setSelectedId(1); addAndMakeVisible(comboRvb);
-    attRvbType=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbType,comboRvb);
+    // Effect-type dropdowns removed — each effect uses its default algorithm.
 
     addAndMakeVisible(btnLoadModel);
     btnLoadModel.onClick=[this]{
@@ -383,6 +375,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     tbTuner.onClick=[this]{ setTunerVisible(tbTuner.getToggleState()); };
     addAndMakeVisible(tbTuner);
 
+    loadPresets();
     refreshSceneButtons();
     startTimerHz(15);
 
@@ -501,9 +494,50 @@ void ArcaneEclipseEditor::showCredits()
     creditsPanel.setVisible(true);
     creditsPanel.toFront(false);
 }
+juce::File ArcaneEclipseEditor::getPresetsFile()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+           .getChildFile("ArcaneEclipse").getChildFile("presets.xml");
+}
+void ArcaneEclipseEditor::savePresets()
+{
+    juce::XmlElement root("AEPresets");
+    for (int i=0;i<20;++i){
+        if (scenes[i].isEmpty()) continue;
+        auto* e = root.createNewChildElement("Scene");
+        e->setAttribute("idx", i);
+        e->setAttribute("name", scenes[i].name);
+        e->setAttribute("nam",  scenes[i].namPath);
+        e->setAttribute("ir",   scenes[i].irPath);
+        if (scenes[i].params.isValid())
+            if (auto px = scenes[i].params.createXml())
+                e->addChildElement(px.release());
+    }
+    auto f = getPresetsFile();
+    f.getParentDirectory().createDirectory();
+    root.writeTo(f);
+}
+void ArcaneEclipseEditor::loadPresets()
+{
+    auto f = getPresetsFile();
+    if (!f.existsAsFile()) return;
+    auto xml = juce::parseXML(f);
+    if (xml == nullptr || xml->getTagName() != "AEPresets") return;
+    for (auto* e : xml->getChildIterator()){
+        if (e->getTagName() != "Scene") continue;
+        int i = e->getIntAttribute("idx", -1);
+        if (i < 0 || i >= 20) continue;
+        scenes[i].name    = e->getStringAttribute("name", "Empty");
+        scenes[i].namPath = e->getStringAttribute("nam");
+        scenes[i].irPath  = e->getStringAttribute("ir");
+        if (auto* px = e->getFirstChildElement())
+            scenes[i].params = juce::ValueTree::fromXml(*px);
+    }
+}
 void ArcaneEclipseEditor::deleteScene(int slot){
     scenes[slot]=SceneData();
     if(activeScene==slot) activeScene=-1;
+    savePresets();
     refreshSceneButtons(); repaint();
 }
 void ArcaneEclipseEditor::renameScene(int slot){
@@ -518,6 +552,7 @@ void ArcaneEclipseEditor::renameScene(int slot){
             if(r==1 && renameWindow!=nullptr){
                 auto n=renameWindow->getTextEditorContents("nm").trim();
                 if(n.isNotEmpty() && n!="Empty") scenes[slot].name=n;
+                savePresets();
             }
             renameWindow.reset();
             refreshSceneButtons(); repaint();
@@ -531,6 +566,7 @@ void ArcaneEclipseEditor::saveScene(int slot){
     scenes[slot].params  = proc.apvts.copyState();
     if(scenes[slot].name=="Empty") scenes[slot].name = slotCode(slot);
     activeScene=slot;
+    savePresets();
 }
 void ArcaneEclipseEditor::loadScene(int slot){
     if(scenes[slot].isEmpty()) return;
@@ -605,15 +641,12 @@ void ArcaneEclipseEditor::resized()
     kModRate .place(modX+(int)(cardW*0.28f),topCy,fxSz,true);
     kModDepth.place(modX+(int)(cardW*0.72f),topCy,fxSz,true);
     kModMix  .place(modX+cardW/2,           botCy,fxSz,true);
-    comboMod.setBounds(modX+10,comboY,cardW-20,24);
     kDTime    .place(dlX+(int)(cardW*0.28f),topCy,fxSz,true);
     kDFeedback.place(dlX+(int)(cardW*0.72f),topCy,fxSz,true);
     kDMix     .place(dlX+cardW/2,           botCy,fxSz,true);
-    comboDly.setBounds(dlX+10,comboY,cardW-20,24);
     kRDecay.place(rvX+(int)(cardW*0.28f),topCy,fxSz,true);
     kRSize .place(rvX+(int)(cardW*0.72f),topCy,fxSz,true);
     kRMix  .place(rvX+cardW/2,           botCy,fxSz,true);
-    comboRvb.setBounds(rvX+10,comboY,cardW-20,24);
 
     // Cabinet loader buttons (mapped to the art's recessed slots)
     int cabX=844; auto px=[&](float v){return cabX+(int)(v*kCabW/477.f);};

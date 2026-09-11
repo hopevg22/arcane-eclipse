@@ -114,6 +114,7 @@ private:
     void saveScene(int slot);
     void loadScene(int slot);
     void refreshSceneButtons();
+    void savePresets(); void loadPresets(); juce::File getPresetsFile();
     void deleteScene(int slot);
     void renameScene(int slot);
 

@@ -378,7 +378,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             apvts.getRawParameterValue(idReverbDecay)->load(),
             0.f, .5f,
             apvts.getRawParameterValue(idReverbSize)->load(),
-            .6f, .2f,
+            .72f, .45f,
             apvts.getRawParameterValue(idReverbMix)->load());
         reverb.processBlock(buffer);
     }

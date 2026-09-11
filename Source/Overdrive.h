@@ -3,70 +3,83 @@
 #include <cmath>
 
 /*
-    TubeScreamerDrive — a gentle Tube Screamer-style overdrive / booster.
+    TubeScreamerDrive — a Tube Screamer-style overdrive.
 
-    Signal path:
-        input → moderate pre-gain → soft clip (tanh) → tone tilt → output level
-
-    IMPORTANT: this is a BOOSTER into the amp, not a fuzz. The pre-gain is kept
-    modest (1x..9x) so it pushes the NAM amp harder while preserving pick
-    dynamics and the amp's character — rather than square-waving the signal
-    and erasing the amp tone.
+    Real overdrive that ADDS drive/saturation to push the amp, with the
+    classic TS voicing: the drive is focused on the mids/highs while the
+    low end stays tight and relatively clean, and the clipping is soft and
+    slightly asymmetric (even-harmonic warmth). Use it in front of the amp
+    to tighten and push it into more gain.
 */
 class TubeScreamerDrive
 {
 public:
-    void prepare (double sr, int /*block*/)
+    void prepare (double sr, int /*block*/) { sampleRate = sr; reset(); }
+    void reset()
     {
-        sampleRate = sr;
-        lpState[0] = lpState[1] = 0.0f;
+        hpState[0]=hpState[1]=0.f;
+        toneState[0]=toneState[1]=0.f;
     }
 
-    void reset() { lpState[0] = lpState[1] = 0.0f; }
-
-    // drive: 0..1   tone: 0..1 (dark..bright)   level: 0..1 output
+    // drive/tone/level all 0..1
     void setParameters (float drive, float tone, float level)
     {
-        // Gentle booster range — NOT a fuzz. 1x .. 9x into a soft clipper.
-        preGain = 1.0f + juce::jlimit (0.0f, 1.0f, drive) * 8.0f;
+        drive = juce::jlimit(0.f,1.f,drive);
+        // Real overdrive gain: 2x .. ~34x into a soft clipper
+        driveGain = 2.0f + drive * 32.0f;
 
-        // Tone: one-pole lowpass cutoff 700Hz(dark) .. 5000Hz(bright)
-        float freq = 700.0f + juce::jlimit (0.0f, 1.0f, tone) * 4300.0f;
-        lpCoeff  = std::exp (-2.0f * juce::MathConstants<float>::pi * freq / (float) sampleRate);
-        lpCoeff  = juce::jlimit (0.0f, 0.999f, lpCoeff);
-        toneParam = juce::jlimit (0.0f, 1.0f, tone);
+        // Pre-split lowpass ~720Hz — TS clips the band ABOVE this, keeping lows tight
+        hpCoeff = std::exp(-2.0f*juce::MathConstants<float>::pi*720.0f/(float)sampleRate);
 
-        // Output ~unity at level 0.7 so it boosts, not buries or silences
-        outLevel = 0.4f + juce::jlimit (0.0f, 1.0f, level) * 0.9f; // 0.4 .. 1.3
+        // Tone: post lowpass 600Hz(dark) .. 4500Hz(bright)
+        float f = 600.0f + juce::jlimit(0.f,1.f,tone)*3900.0f;
+        toneCoeff = std::exp(-2.0f*juce::MathConstants<float>::pi*f/(float)sampleRate);
+        toneParam = juce::jlimit(0.f,1.f,tone);
+
+        outLevel = juce::jlimit(0.f,1.f,level);
     }
 
     void processBlock (juce::AudioBuffer<float>& buffer)
     {
-        int numSamples  = buffer.getNumSamples();
-        int numChannels = buffer.getNumChannels();
+        int n  = buffer.getNumSamples();
+        int nc = juce::jmin(buffer.getNumChannels(),2);
+        // level compensation so high drive stays usable
+        float comp = 1.0f / (1.0f + 0.05f * (driveGain - 2.0f));
 
-        for (int ch = 0; ch < juce::jmin (numChannels, 2); ++ch)
+        for (int ch=0; ch<nc; ++ch)
         {
-            auto* data = buffer.getWritePointer (ch);
-            for (int n = 0; n < numSamples; ++n)
+            auto* d = buffer.getWritePointer(ch);
+            for (int i=0;i<n;++i)
             {
-                // Soft clip — small signals boost linearly, loud ones round off
-                float x = std::tanh (data[n] * preGain);
+                float x = d[i];
 
-                // Tone tilt: blend a lowpassed (dark) copy with the direct (bright) one
-                lpState[ch] += (1.0f - lpCoeff) * (x - lpState[ch]);
-                float shaped = lpState[ch] + toneParam * (x - lpState[ch]);
+                // Split lows (kept clean/tight) from the mid/high band that gets driven
+                hpState[ch] += (1.0f - hpCoeff) * (x - hpState[ch]);   // low band
+                float high = x - hpState[ch];                          // mid/high band
 
-                data[n] = shaped * outLevel;
+                // Drive + asymmetric soft clip (even-harmonic TS warmth)
+                float clipped = asymClip(high * driveGain);
+
+                // Recombine with some clean low end for body & tightness
+                float mixed = clipped + hpState[ch] * 0.7f;
+
+                // Tone tilt (post lowpass blend)
+                toneState[ch] += (1.0f - toneCoeff) * (mixed - toneState[ch]);
+                float shaped = toneState[ch] + toneParam * (mixed - toneState[ch]);
+
+                d[i] = shaped * comp * (0.5f + outLevel);
             }
         }
     }
 
 private:
+    static float asymClip (float x)
+    {
+        // Bias then remove DC -> asymmetric soft clip (even + odd harmonics)
+        return std::tanh(x + 0.12f) - std::tanh(0.12f);
+    }
+
     double sampleRate = 48000.0;
-    float  preGain    = 1.0f;
-    float  lpCoeff    = 0.5f;
-    float  toneParam  = 0.5f;
-    float  outLevel   = 1.0f;
-    float  lpState[2] = { 0.0f, 0.0f };
+    float driveGain=8.f, hpCoeff=0.9f, toneCoeff=0.5f, toneParam=0.5f, outLevel=0.7f;
+    float hpState[2]={0.f,0.f}, toneState[2]={0.f,0.f};
 };
