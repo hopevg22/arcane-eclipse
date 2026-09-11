@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
+#include "AEActivationDialog.h"
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 namespace AEP {
