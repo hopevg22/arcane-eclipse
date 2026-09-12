@@ -205,6 +205,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 1. INPUT GAIN
     buffer.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idInputGain)->load()));
+    inLevel.store(buffer.getMagnitude(0, numSamples));   // input meter
 
     // 2. NOISE GATE — only when enabled
     if (apvts.getRawParameterValue(idGateOn)->load() > .5f)
@@ -410,6 +411,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             d[n] = v;
         }
     }
+    outLevel.store(buffer.getMagnitude(0, numSamples));   // output meter
 }
 
 bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file)

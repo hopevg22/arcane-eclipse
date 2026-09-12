@@ -421,7 +421,9 @@ void ArcaneEclipseEditor::timerCallback()
             tunerHz = hz;
         } else { tunerHz = 0.f; tunerNote = {}; tunerCents = 0.f; }
     }
-    vuIn *= .92f; vuOut *= .92f; repaint();
+    vuIn  = juce::jmax(vuIn  * 0.80f, juce::jlimit(0.f,1.f, proc.inLevel.load()));
+    vuOut = juce::jmax(vuOut * 0.80f, juce::jlimit(0.f,1.f, proc.outLevel.load()));
+    repaint();
 }
 
 void ArcaneEclipseEditor::setTunerVisible(bool v)
@@ -482,17 +484,23 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
     // Scene slot context menu (save / load / rename / delete)
     for(int i=0;i<4;++i) if(e.eventComponent==&sceneBtn[i]){
         int idx=currentBank*4+i; bool empty=scenes[idx].isEmpty();
+        int acc=proc.ccForAction(i);
         juce::PopupMenu m;
         m.addItem(1,"Save here");
         m.addItem(2,"Load",!empty);
         m.addItem(3,"Rename...",!empty);
         m.addItem(4,"Delete",!empty);
+        m.addSeparator();
+        m.addItem(5, acc<0 ? "MIDI Learn (footswitch)" : "MIDI Learn (re-assign)");
+        if(acc>=0) m.addItem(6, "Clear MIDI (CC "+juce::String(acc)+")");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&sceneBtn[i]),
-            [this,idx](int r){
+            [this,idx,i](int r){
                 if(r==1){ saveScene(idx); refreshSceneButtons(); repaint(); }
                 else if(r==2){ loadScene(idx); refreshSceneButtons(); repaint(); }
                 else if(r==3){ renameScene(idx); }
                 else if(r==4){ deleteScene(idx); }
+                else if(r==5){ proc.actionLearnStart(i); learningAction=i; repaint(); }
+                else if(r==6){ proc.actionLearnClear(i); repaint(); }
             });
         return;
     }
@@ -935,6 +943,17 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
      juce::Path st2;st2.startNewSubPath(ex-R-2,ey);st2.lineTo(ex,ey-2);st2.lineTo(ex+R+2,ey);st2.lineTo(ex,ey+2);st2.closeSubPath();
      g.setColour(juce::Colour(0xffc9a3ff)); g.fillPath(st2);
      g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(ex-1.7f,ey-1.7f,3.4f,3.4f);}
+    // AMARI LABS logo on the speaker grille (brand mark)
+    {
+        static juce::Image amariLogo = juce::ImageCache::getFromMemory(BinaryData::logo_amari_png, BinaryData::logo_amari_pngSize);
+        if(amariLogo.isValid()){
+            float sx=(float)px(134), sy=(float)py(171);          // speaker grille centre
+            float lw=96.f, lh=lw*amariLogo.getHeight()/(float)amariLogo.getWidth();
+            g.setColour(juce::Colours::white); // (no tint; drawImage uses image alpha)
+            g.drawImage(amariLogo, (int)(sx-lw/2),(int)(sy-lh/2),(int)lw,(int)lh,
+                        0,0,amariLogo.getWidth(),amariLogo.getHeight());
+        }
+    }
 }
 
 void ArcaneEclipseEditor::paintSceneBar(juce::Graphics& g){ juce::ignoreUnused(g); }
@@ -954,10 +973,12 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
     g.setColour(kPurple); g.fillRoundedRectangle(142.f,(float)(Y+10),28.f,14.f,3.f);
     g.setFont(juce::Font(7.f).boldened()); g.setColour(juce::Colours::white);
     g.drawText("ON",142,Y+10,28,14,juce::Justification::centred);
-    g.setColour(kPurple); g.fillRoundedRectangle((float)(W/2-30),(float)(Y+6),58.f,22.f,4.f);
-    g.setFont(juce::Font(9.f).boldened()); g.setColour(juce::Colours::white);
-    g.drawText("RIG",W/2-30,Y+6,58,22,juce::Justification::centred);
-    g.setColour(kMuted); g.drawText("FX",W/2+36,Y+9,24,16,juce::Justification::centred);
+    static juce::Image amariLogo = juce::ImageCache::getFromMemory(BinaryData::logo_amari_png, BinaryData::logo_amari_pngSize);
+    if(amariLogo.isValid()){
+        int lh = kFootH - 10;
+        int lw = (int)(lh * amariLogo.getWidth() / (float)amariLogo.getHeight());
+        g.drawImage(amariLogo, W/2 - lw/2, Y + (kFootH-lh)/2, lw, lh, 0,0,amariLogo.getWidth(),amariLogo.getHeight());
+    }
     g.setColour(proc.isNAMLoaded()?kPurple:kMuted.withAlpha(.3f));
     g.fillEllipse((float)(W-80),(float)(Y+13),8.f,8.f);
     g.setFont(juce::Font(8.f)); g.setColour(kMuted);

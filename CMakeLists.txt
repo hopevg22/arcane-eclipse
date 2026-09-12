@@ -68,6 +68,7 @@ juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/panels/amp.png
     Resources/panels/fxcard.png
     Resources/panels/cabinet.png
+    Resources/logo_amari.png
     Resources/knobs/knob_unified.png
     Resources/knobs/knob_strip.png
     Resources/knobs/knob_amp.png

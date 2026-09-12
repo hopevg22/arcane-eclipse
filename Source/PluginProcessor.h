@@ -54,6 +54,7 @@ public:
     // Tuner — the editor sets tunerActive when open; processor fills tunerFreq
     std::atomic<bool>  tunerActive { false };
     std::atomic<float> tunerFreq   { 0.f };
+    std::atomic<float> inLevel { 0.f }, outLevel { 0.f };  // VU meters
 
     // Patch/bank navigation via MIDI (0=prevPreset,1=nextPreset,2=prevBank,3=nextBank)
     void actionLearnStart(int action);
