@@ -55,6 +55,14 @@ public:
     std::atomic<bool>  tunerActive { false };
     std::atomic<float> tunerFreq   { 0.f };
 
+    // Patch/bank navigation via MIDI (0=prevPreset,1=nextPreset,2=prevBank,3=nextBank)
+    void actionLearnStart(int action);
+    void actionLearnClear(int action);
+    int  ccForAction(int action) const;
+    int  actionLearningNow() const;
+    int  takePendingAction();          // returns a pending action then clears it (-1 = none)
+    void cancelLearn();                // cancel any in-progress learn (knob/node/action)
+
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -123,6 +131,7 @@ private:
     void updateEQ();
     float gateEnvelope = 0.f;
     float dcX1[2] = {0.f,0.f}, dcY1[2] = {0.f,0.f};  // DC blocker state
+    bool  prevReverbOn = false;                     // reset reverb tail on enable
 
     // MIDI learn state
     std::vector<juce::String> learnParamIDs;
@@ -131,6 +140,9 @@ private:
     std::atomic<int> learnTarget { -1 };
     std::vector<bool> learnIsToggle;        // parallel to learnParamIDs
     int prevCCVal[128] = { 0 };             // for footswitch rising-edge detection
+    std::atomic<int> actionCC[128];         // CC -> patch/bank action, or -1
+    std::atomic<int> actionLearn   { -1 };
+    std::atomic<int> actionPending { -1 };
     int indexOfParam(const juce::String& id) const;
     // Tuner
     std::vector<float> tunerBuf;

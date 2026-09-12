@@ -27,6 +27,7 @@ ArcaneEclipseProcessor::ArcaneEclipseProcessor()
             learnIsToggle[i] = true;
     }
     for (auto& c : ccMap) c.store(-1);
+    for (auto& c : actionCC) c.store(-1);
     for (auto& v : prevCCVal) v = 0;
 }
 
@@ -165,13 +166,14 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         if (msg.isController()) {
             const int cc = msg.getControllerNumber();
             const int val = msg.getControllerValue();
+            const int al = actionLearn.load();
             const int lt = learnTarget.load();
-            if (lt >= 0) { ccMap[cc].store(lt); learnTarget.store(-1); }
+            if (al >= 0) { actionCC[cc].store(al); actionLearn.store(-1); }
+            else if (lt >= 0) { ccMap[cc].store(lt); learnTarget.store(-1); }
             else {
                 const int pi = ccMap[cc].load();
                 if (pi >= 0 && pi < (int) learnParamPtrs.size() && learnParamPtrs[pi] != nullptr) {
                     if (pi < (int) learnIsToggle.size() && learnIsToggle[pi]) {
-                        // Footswitch: flip the on/off state on a rising edge (press)
                         if (prevCCVal[cc] < 64 && val >= 64) {
                             float cur = learnParamPtrs[pi]->getValue();
                             learnParamPtrs[pi]->setValueNotifyingHost(cur < 0.5f ? 1.0f : 0.0f);
@@ -180,6 +182,9 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                         learnParamPtrs[pi]->setValueNotifyingHost(val / 127.0f);
                     }
                 }
+                // Patch/bank action trigger on rising edge (footswitch press)
+                const int a = actionCC[cc].load();
+                if (a >= 0 && prevCCVal[cc] < 64 && val >= 64) actionPending.store(a);
             }
             prevCCVal[cc] = val;
         }
@@ -373,6 +378,11 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     }
 
     // 12. REVERB — always last
+    {
+        bool rvOn = apvts.getRawParameterValue(idReverbOn)->load() > .5f;
+        if (rvOn && ! prevReverbOn) reverb.reset();   // clear any stale tail on enable
+        prevReverbOn = rvOn;
+    }
     if (apvts.getRawParameterValue(idReverbOn)->load() > .5f) {
         reverb.setParameters(
             apvts.getRawParameterValue(idReverbDecay)->load(),
@@ -393,7 +403,11 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         for (int n = 0; n < numSamples; ++n) {
             float v = d[n];
             if (!std::isfinite(v)) v = 0.f;
-            d[n] = juce::jlimit(-2.0f, 2.0f, v);
+            // Transparent below unity; smoothly soft-limit anything above so a
+            // runaway can never clip harshly or blast the speakers.
+            if      (v >  1.0f) v =  1.0f + std::tanh(v - 1.0f);
+            else if (v < -1.0f) v = -1.0f - std::tanh(-v - 1.0f);
+            d[n] = v;
         }
     }
 }
@@ -482,6 +496,19 @@ int ArcaneEclipseProcessor::ccForParam(const juce::String& paramID) const {
     for (int c = 0; c < 128; ++c) if (ccMap[c].load() == idx) return c;
     return -1;
 }
+
+void ArcaneEclipseProcessor::actionLearnStart(int a) { actionLearn.store(a); learnTarget.store(-1); }
+void ArcaneEclipseProcessor::actionLearnClear(int a) {
+    for (int c = 0; c < 128; ++c) if (actionCC[c].load() == a) actionCC[c].store(-1);
+    if (actionLearn.load() == a) actionLearn.store(-1);
+}
+int  ArcaneEclipseProcessor::ccForAction(int a) const {
+    for (int c = 0; c < 128; ++c) if (actionCC[c].load() == a) return c;
+    return -1;
+}
+int  ArcaneEclipseProcessor::actionLearningNow() const { return actionLearn.load(); }
+int  ArcaneEclipseProcessor::takePendingAction() { return actionPending.exchange(-1); }
+void ArcaneEclipseProcessor::cancelLearn() { learnTarget.store(-1); actionLearn.store(-1); }
 
 // ── Tuner pitch detection (autocorrelation) ──────────────────────────────────
 float ArcaneEclipseProcessor::detectPitch(const float* buf, int n, double sr)

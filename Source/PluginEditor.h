@@ -93,6 +93,7 @@ public:
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    bool keyPressed(const juce::KeyPress&) override;
     void resized() override;
 
 private:
@@ -146,6 +147,10 @@ private:
     std::vector<AEKnob*> allKnobs;
     struct NodeLearn { juce::Component* comp; juce::String pid; int nodeIdx; };
     std::vector<NodeLearn> nodeLearns;
+    struct ActLearn { juce::Component* comp; int action; };  // patch/bank nav MIDI
+    std::vector<ActLearn> actLearns;
+    int learningAction = -1;
+    void stepPreset(int d); void stepBank(int d); void cancelMidiLearn();
     juce::String learningID;
     std::unique_ptr<juce::AlertWindow> renameWindow;
     std::unique_ptr<AEActivationDialog> activationDialog;

@@ -269,6 +269,12 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     };
     for (auto& nl : nodeLearns) nl.comp->addMouseListener(this, false);
 
+    setWantsKeyboardFocus(true);
+    actLearns = {                 // direct MIDI-learn buttons
+        {&bankPrev, 4}, {&bankNext, 5}, {&presetPrev, 6}, {&presetNext, 7}
+    };
+    for (auto& a : actLearns) a.comp->addMouseListener(this, false);
+
     for(auto* t:{&tbGate,&tbComp,&stompOD,&stompMod,&stompDelay,&stompReverb,&tbCab})
         addAndMakeVisible(*t);
     attGate  =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idGateOn,   tbGate);
@@ -318,18 +324,14 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     }
     bankPrev.setButtonText("< BANK"); bankNext.setButtonText("BANK >");
     addAndMakeVisible(bankPrev); addAndMakeVisible(bankNext);
-    bankPrev.onClick=[this]{ currentBank=(currentBank+4)%5; refreshSceneButtons(); repaint(); };
-    bankNext.onClick=[this]{ currentBank=(currentBank+1)%5; refreshSceneButtons(); repaint(); };
+    bankPrev.onClick=[this]{ stepBank(-1); };
+    bankNext.onClick=[this]{ stepBank(+1); };
 
     // Header preset nav (invisible over painted arrows) + save
     presetPrev.setClickingTogglesState(false); presetNext.setClickingTogglesState(false);
     addAndMakeVisible(presetPrev); addAndMakeVisible(presetNext);
-    auto step=[this](int d){
-        int n=activeScene<0?0:activeScene; n=(n+d+20)%20; loadScene(n);
-        currentBank=n/4; refreshSceneButtons(); repaint();
-    };
-    presetPrev.onClick=[step]{ step(-1); };
-    presetNext.onClick=[step]{ step(+1); };
+    presetPrev.onClick=[this]{ stepPreset(-1); };
+    presetNext.onClick=[this]{ stepPreset(+1); };
     headerSave.setColour(juce::TextButton::buttonColourId,kPurple);
     headerSave.setColour(juce::TextButton::textColourOffId,juce::Colours::white);
     addAndMakeVisible(headerSave);
@@ -398,6 +400,15 @@ ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);
 void ArcaneEclipseEditor::timerCallback()
 {
     learningID = proc.midiLearningParamID();
+    learningAction = proc.actionLearningNow();
+    {
+        int pa = proc.takePendingAction();
+        if      (pa >= 0 && pa <= 3) { loadScene(currentBank*4+pa); refreshSceneButtons(); repaint(); }
+        else if (pa == 4) stepBank(-1);
+        else if (pa == 5) stepBank(+1);
+        else if (pa == 6) stepPreset(-1);
+        else if (pa == 7) stepPreset(+1);
+    }
     if (tunerVisible) {
         float hz = proc.tunerFreq.load();
         if (hz > 20.f) {
@@ -425,6 +436,23 @@ void ArcaneEclipseEditor::setTunerVisible(bool v)
     if(v) creditsPanel.setVisible(false);
     repaint();
 }
+void ArcaneEclipseEditor::stepPreset(int d){
+    int n=activeScene<0?0:activeScene; n=(n+d+20)%20; loadScene(n);
+    currentBank=n/4; refreshSceneButtons(); repaint();
+}
+void ArcaneEclipseEditor::stepBank(int d){
+    currentBank=(currentBank+d+5)%5; refreshSceneButtons(); repaint();
+}
+void ArcaneEclipseEditor::cancelMidiLearn(){
+    proc.cancelLearn(); learningID={}; learningAction=-1; repaint();
+}
+bool ArcaneEclipseEditor::keyPressed(const juce::KeyPress& k){
+    if((!learningID.isEmpty() || learningAction>=0) &&
+       (k==juce::KeyPress::escapeKey || k==juce::KeyPress::returnKey)){
+        cancelMidiLearn(); return true;
+    }
+    return false;
+}
 void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
 {
     if(tunerVisible){
@@ -432,7 +460,25 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
         if(juce::Rectangle<int>(W-46,12,30,30).contains(pos)) setTunerVisible(false);
         return;
     }
+    // A left click anywhere cancels an in-progress MIDI learn
+    if((!learningID.isEmpty() || learningAction>=0) && !e.mods.isPopupMenu()){
+        cancelMidiLearn(); return;
+    }
     if(!e.mods.isPopupMenu()) return;
+    // Patch/bank selector MIDI learn (preset < >, bank < >)
+    for(auto& a:actLearns) if(e.eventComponent==a.comp){
+        int cc=proc.ccForAction(a.action);
+        juce::PopupMenu m;
+        m.addItem(1, cc<0 ? "MIDI Learn (footswitch)" : "MIDI Learn (re-assign)");
+        if(cc>=0) m.addItem(2, "Clear MIDI (CC "+juce::String(cc)+")");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(a.comp),
+            [this,act=a.action](int r){
+                if(r==1){ proc.actionLearnStart(act); learningAction=act; }
+                else if(r==2){ proc.actionLearnClear(act); }
+                repaint();
+            });
+        return;
+    }
     // Scene slot context menu (save / load / rename / delete)
     for(int i=0;i<4;++i) if(e.eventComponent==&sceneBtn[i]){
         int idx=currentBank*4+i; bool empty=scenes[idx].isEmpty();
@@ -691,7 +737,7 @@ void ArcaneEclipseEditor::paint(juce::Graphics& g)
 }
 void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
 {
-    if(tunerVisible || learningID.isEmpty()) return;
+    if(tunerVisible || (learningID.isEmpty() && learningAction<0)) return;
     float pulse=(float)std::sin(juce::Time::getMillisecondCounter()*0.006)*0.5f+0.5f;
     for(auto* k:allKnobs) if(k->paramID==learningID && k->slider.isVisible()){
         auto b=k->slider.getBounds().toFloat().expanded(3.f);
@@ -706,6 +752,21 @@ void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
         g.drawRoundedRectangle(nb.toFloat().expanded(2.f),8.f,2.5f);
         haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
                  {nb.getX()-8,nb.getY()-13,nb.getWidth()+16,12},juce::Justification::centred);
+    }
+    if(learningAction>=0){
+        juce::Component* ac=nullptr;
+        if(learningAction>=0 && learningAction<=3) ac=&sceneBtn[learningAction];
+        else if(learningAction==4) ac=&bankPrev;
+        else if(learningAction==5) ac=&bankNext;
+        else if(learningAction==6) ac=&presetPrev;
+        else if(learningAction==7) ac=&presetNext;
+        if(ac!=nullptr){
+            auto nb=ac->getBounds();
+            g.setColour(kPurple.withAlpha(0.35f+0.55f*pulse));
+            g.drawRoundedRectangle(nb.toFloat().expanded(2.f),6.f,2.5f);
+            haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
+                     {nb.getX()-6,nb.getY()-13,nb.getWidth()+12,12},juce::Justification::centred);
+        }
     }
 }
 
