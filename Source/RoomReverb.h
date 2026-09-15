@@ -33,10 +33,14 @@ public:
         mix01   = juce::jlimit (0.f, 1.f, mix01);
 
         juce::Reverb::Parameters p;
-        p.roomSize   = juce::jlimit (0.f, 1.f, 0.30f + size01 * 0.65f);
-        p.damping    = juce::jlimit (0.f, 1.f, 0.90f - decay01 * 0.85f); // more decay -> longer tail
-        p.wetLevel   = mix01;
-        p.dryLevel   = 1.0f - mix01;
+        // Keep room size moderate so the reverb never builds up runaway energy.
+        p.roomSize   = juce::jlimit (0.f, 1.f, 0.20f + size01  * 0.60f);  // 0.20 .. 0.80
+        p.damping    = juce::jlimit (0.f, 1.f, 0.85f - decay01 * 0.70f);  // more decay -> longer tail (min damping keeps it stable)
+        // Equal-power-ish wet/dry so ACTIVATING the reverb adds ambience
+        // WITHOUT boosting the overall level. Wet is scaled back; dry eases
+        // down as the mix comes up.
+        p.wetLevel   = mix01 * 0.7f;
+        p.dryLevel   = 1.0f - mix01 * 0.5f;
         p.width      = 1.0f;
         p.freezeMode = 0.0f;
         reverb.setParameters (p);
