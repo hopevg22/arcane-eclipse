@@ -943,15 +943,14 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
      juce::Path st2;st2.startNewSubPath(ex-R-2,ey);st2.lineTo(ex,ey-2);st2.lineTo(ex+R+2,ey);st2.lineTo(ex,ey+2);st2.closeSubPath();
      g.setColour(juce::Colour(0xffc9a3ff)); g.fillPath(st2);
      g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(ex-1.7f,ey-1.7f,3.4f,3.4f);}
-    // AMARI LABS logo on the speaker grille (brand mark)
+    // AMARI LABS mark (white, artwork only) centred on the speaker grille
     {
-        static juce::Image amariLogo = juce::ImageCache::getFromMemory(BinaryData::logo_amari_png, BinaryData::logo_amari_pngSize);
-        if(amariLogo.isValid()){
-            float sx=(float)px(134), sy=(float)py(171);          // speaker grille centre
-            float lw=96.f, lh=lw*amariLogo.getHeight()/(float)amariLogo.getWidth();
-            g.setColour(juce::Colours::white); // (no tint; drawImage uses image alpha)
-            g.drawImage(amariLogo, (int)(sx-lw/2),(int)(sy-lh/2),(int)lw,(int)lh,
-                        0,0,amariLogo.getWidth(),amariLogo.getHeight());
+        static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_white_png, BinaryData::logo_amari_mark_white_pngSize);
+        if(amariMark.isValid()){
+            float sx=(float)px(119), sy=(float)py(172);          // speaker mesh centre
+            float lw=84.f, lh=lw*amariMark.getHeight()/(float)amariMark.getWidth();
+            g.drawImage(amariMark, (int)(sx-lw/2),(int)(sy-lh/2),(int)lw,(int)lh,
+                        0,0,amariMark.getWidth(),amariMark.getHeight());
         }
     }
 }
