@@ -947,8 +947,8 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
     {
         static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_white_png, BinaryData::logo_amari_mark_white_pngSize);
         if(amariMark.isValid()){
-            float sx=(float)px(119), sy=(float)py(172);          // speaker mesh centre
-            float lw=84.f, lh=lw*amariMark.getHeight()/(float)amariMark.getWidth();
+            float sx=(float)px(119), sy=(float)py(170);          // speaker mesh centre
+            float lw=82.f, lh=lw;                                // square, centroid-centred image
             g.drawImage(amariMark, (int)(sx-lw/2),(int)(sy-lh/2),(int)lw,(int)lh,
                         0,0,amariMark.getWidth(),amariMark.getHeight());
         }
