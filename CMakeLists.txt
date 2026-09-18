@@ -29,7 +29,10 @@ add_subdirectory(NeuralAudio)
 # --- Plugin target
 juce_add_plugin(ArcaneEclipse
     PRODUCT_NAME        "Arcane Eclipse"
-    PLUGIN_MANUFACTURER_CODE Dpec
+    COMPANY_NAME        "Amari Labs"
+    COMPANY_COPYRIGHT   "Copyright (c) 2026 Amari Labs"
+    ICON_BIG            "Resources/app_icon_512.png"
+    PLUGIN_MANUFACTURER_CODE Amar
     PLUGIN_CODE         NmPl
     FORMATS             VST3 Standalone
     IS_SYNTH            FALSE

@@ -122,7 +122,7 @@ void AELAF::drawPopupMenuItem(juce::Graphics& g,const juce::Rectangle<int>& area
 // ── CreditsPanel ─────────────────────────────────────────────────────────────
 static const char* kCreditsText =
     "ARCANE ECLIPSE v1.0.0\n"
-    "Developed by [Your Name]\n"
+    "by AMARI LABS\n"
     "Philippines\n\n"
     "Built with open-source components:\n\n"
     "JUCE Framework\n"

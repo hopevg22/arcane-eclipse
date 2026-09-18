@@ -36,8 +36,13 @@ jobs:
       - name: Build VST3 (Release)
         run: cmake --build build --config Release --target ArcaneEclipse_VST3
 
-      - name: Upload artifact
+      - name: Build Standalone (Release)
+        run: cmake --build build --config Release --target ArcaneEclipse_Standalone
+
+      - name: Upload artifact (VST3 + Standalone)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: build/ArcaneEclipse_artefacts/Release/VST3/*
+          path: |
+            build/ArcaneEclipse_artefacts/Release/VST3/*
+            build/ArcaneEclipse_artefacts/Release/Standalone/*
