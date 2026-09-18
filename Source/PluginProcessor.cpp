@@ -163,18 +163,22 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     // MIDI CC learn / control
     for (const auto meta : midi) {
         const auto msg = meta.getMessage();
-        if (msg.isController()) {
-            const int cc = msg.getControllerNumber();
-            const int val = msg.getControllerValue();
+        // Accept CC and Note messages so most footswitches work (CC 0-127,
+        // Notes mapped to 128-255). Set your pedal to CC or Note mode.
+        int idx = -1, val = 0;
+        if (msg.isController())   { idx = msg.getControllerNumber();      val = msg.getControllerValue(); }
+        else if (msg.isNoteOn())  { idx = 128 + msg.getNoteNumber();      val = 127; }
+        else if (msg.isNoteOff()) { idx = 128 + msg.getNoteNumber();      val = 0;   }
+        if (idx >= 0) {
             const int al = actionLearn.load();
             const int lt = learnTarget.load();
-            if (al >= 0) { actionCC[cc].store(al); actionLearn.store(-1); }
-            else if (lt >= 0) { ccMap[cc].store(lt); learnTarget.store(-1); }
+            if (al >= 0) { actionCC[idx].store(al); actionLearn.store(-1); }
+            else if (lt >= 0) { ccMap[idx].store(lt); learnTarget.store(-1); }
             else {
-                const int pi = ccMap[cc].load();
+                const int pi = ccMap[idx].load();
                 if (pi >= 0 && pi < (int) learnParamPtrs.size() && learnParamPtrs[pi] != nullptr) {
                     if (pi < (int) learnIsToggle.size() && learnIsToggle[pi]) {
-                        if (prevCCVal[cc] < 64 && val >= 64) {
+                        if (prevCCVal[idx] < 64 && val >= 64) {
                             float cur = learnParamPtrs[pi]->getValue();
                             learnParamPtrs[pi]->setValueNotifyingHost(cur < 0.5f ? 1.0f : 0.0f);
                         }
@@ -182,11 +186,10 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                         learnParamPtrs[pi]->setValueNotifyingHost(val / 127.0f);
                     }
                 }
-                // Patch/bank action trigger on rising edge (footswitch press)
-                const int a = actionCC[cc].load();
-                if (a >= 0 && prevCCVal[cc] < 64 && val >= 64) actionPending.store(a);
+                const int a = actionCC[idx].load();
+                if (a >= 0 && prevCCVal[idx] < 64 && val >= 64) actionPending.store(a);
             }
-            prevCCVal[cc] = val;
+            prevCCVal[idx] = val;
         }
     }
 
@@ -261,9 +264,12 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 namOutBuf.assign((size_t)(numSamples + 16), 0.f);
 
             auto* L = buffer.getReadPointer(0);
+            // Guitar is a mono source. Take channel 0 (input 1) so the level is
+            // identical whether the host feeds one channel (Standalone/ASIO) or
+            // duplicates a mono guitar to both channels (DAW). Averaging both
+            // channels would halve the level when only one carries the guitar.
             for (int n = 0; n < numSamples; ++n)
-                monoBuf[(size_t)n] = numCh > 1
-                    ? 0.5f * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
+                monoBuf[(size_t)n] = L[n];
 
             namModel->Process(monoBuf.data(), namOutBuf.data(), (size_t)numSamples);
 
@@ -291,9 +297,12 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             // Mix to mono
             auto* L = buffer.getReadPointer(0);
+            // Guitar is a mono source. Take channel 0 (input 1) so the level is
+            // identical whether the host feeds one channel (Standalone/ASIO) or
+            // duplicates a mono guitar to both channels (DAW). Averaging both
+            // channels would halve the level when only one carries the guitar.
             for (int n = 0; n < numSamples; ++n)
-                monoBuf[(size_t)n] = numCh > 1
-                    ? 0.5f * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
+                monoBuf[(size_t)n] = L[n];
 
             // Upsample host -> 48kHz
             int actualUp = resamplerIn.process(

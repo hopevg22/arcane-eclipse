@@ -39,8 +39,10 @@ public:
         // Equal-power-ish wet/dry so ACTIVATING the reverb adds ambience
         // WITHOUT boosting the overall level. Wet is scaled back; dry eases
         // down as the mix comes up.
-        p.wetLevel   = mix01 * 0.8f;
-        p.dryLevel   = 1.0f - mix01 * 0.55f;
+        // Constant-sum crossfade: dry + wet always equals 1.0, so turning the
+        // reverb up can NEVER raise the overall level — it only trades dry for wet.
+        p.wetLevel   = mix01 * 0.6f;
+        p.dryLevel   = 1.0f - mix01 * 0.6f;
         p.width      = 1.0f;
         p.freezeMode = 0.0f;
         reverb.setParameters (p);

@@ -137,11 +137,11 @@ private:
     // MIDI learn state
     std::vector<juce::String> learnParamIDs;
     std::vector<juce::RangedAudioParameter*> learnParamPtrs;
-    std::atomic<int> ccMap[128];
+    std::atomic<int> ccMap[256];      // 0-127 = CC number, 128-255 = Note number
     std::atomic<int> learnTarget { -1 };
     std::vector<bool> learnIsToggle;        // parallel to learnParamIDs
-    int prevCCVal[128] = { 0 };             // for footswitch rising-edge detection
-    std::atomic<int> actionCC[128];         // CC -> patch/bank action, or -1
+    int prevCCVal[256] = { 0 };             // for footswitch rising-edge detection
+    std::atomic<int> actionCC[256];         // MIDI (CC/Note) -> patch/bank action, or -1
     std::atomic<int> actionLearn   { -1 };
     std::atomic<int> actionPending { -1 };
     int indexOfParam(const juce::String& id) const;
