@@ -622,8 +622,15 @@ void ArcaneEclipseEditor::saveScene(int slot){
     activeScene=slot;
     savePresets();
 }
+void ArcaneEclipseEditor::resetToDefault(){
+    for (auto* prm : proc.getParameters())
+        prm->setValueNotifyingHost(prm->getDefaultValue());
+    if(curNAMPath.isNotEmpty()){ proc.unloadNAMModel(); curNAMPath={}; }
+    if(curIRPath.isNotEmpty()) { proc.unloadIR();       curIRPath={}; }
+    repaint();
+}
 void ArcaneEclipseEditor::loadScene(int slot){
-    if(scenes[slot].isEmpty()) return;
+    if(scenes[slot].isEmpty()){ resetToDefault(); activeScene=slot; return; }
     if(scenes[slot].params.isValid())
         proc.apvts.replaceState(scenes[slot].params);
     // Recall the scene's NAM model (reload only when it changes)
@@ -948,7 +955,7 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
         static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_white_png, BinaryData::logo_amari_mark_white_pngSize);
         if(amariMark.isValid()){
             float sx=(float)px(119), sy=(float)py(170);          // speaker mesh centre
-            float lw=82.f, lh=lw;                                // square, centroid-centred image
+            float lw=62.f, lh=lw;                                // square, centred image
             g.drawImage(amariMark, (int)(sx-lw/2),(int)(sy-lh/2),(int)lw,(int)lh,
                         0,0,amariMark.getWidth(),amariMark.getHeight());
         }
@@ -963,26 +970,22 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
     juce::ColourGradient fg(juce::Colour(0xff0c0c12),0,(float)Y,juce::Colour(0xff08080e),0,(float)H,false);
     g.setGradientFill(fg); g.fillRect(0,Y,W,kFootH);
     g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
-    g.setColour(kMuted); juce::Path hp;
-    hp.addCentredArc(24.f,(float)(Y+17),8.f,7.f,0.f,3.3f,6.22f,true);
-    g.strokePath(hp,juce::PathStrokeType(2.f));
-    g.fillEllipse(14.f,(float)(Y+20),5.f,8.f); g.fillEllipse(27.f,(float)(Y+20),5.f,8.f);
-    g.setFont(juce::Font(8.f).boldened()); g.setColour(kMuted);
-    g.drawText("INPUT MONITOR",36,Y+9,105,16,juce::Justification::centredLeft);
-    g.setColour(kPurple); g.fillRoundedRectangle(142.f,(float)(Y+10),28.f,14.f,3.f);
-    g.setFont(juce::Font(7.f).boldened()); g.setColour(juce::Colours::white);
-    g.drawText("ON",142,Y+10,28,14,juce::Justification::centred);
-    static juce::Image amariLogo = juce::ImageCache::getFromMemory(BinaryData::logo_amari_png, BinaryData::logo_amari_pngSize);
-    if(amariLogo.isValid()){
-        int lh = kFootH - 10;
-        int lw = (int)(lh * amariLogo.getWidth() / (float)amariLogo.getHeight());
-        g.drawImage(amariLogo, W/2 - lw/2, Y + (kFootH-lh)/2, lw, lh, 0,0,amariLogo.getWidth(),amariLogo.getHeight());
+    // Lower-left: developer credit (replaces the old Input Monitor)
+    g.setFont(juce::Font(9.f).boldened()); g.setColour(kMuted);
+    g.drawText("DEVELOPED BY AMARI LABS",16,Y,240,kFootH,juce::Justification::centredLeft);
+    // Centre: AMARI LABS mark (colour, artwork only), enlarged
+    static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_color_png, BinaryData::logo_amari_mark_color_pngSize);
+    if(amariMark.isValid()){
+        int lh = kFootH - 4;
+        int lw = (int)(lh * amariMark.getWidth() / (float)amariMark.getHeight());
+        g.drawImage(amariMark, W/2 - lw/2, Y + (kFootH-lh)/2, lw, lh, 0,0,amariMark.getWidth(),amariMark.getHeight());
     }
-    g.setColour(proc.isNAMLoaded()?kPurple:kMuted.withAlpha(.3f));
+    // Lower-right: AMP lights when a NAM model is loaded, CAB when an IR is loaded
+    g.setColour(proc.isNAMLoaded()?kPurple:juce::Colour(0xff2a2a34));
     g.fillEllipse((float)(W-80),(float)(Y+13),8.f,8.f);
     g.setFont(juce::Font(8.f)); g.setColour(kMuted);
     g.drawText("AMP",W-70,Y+10,30,14,juce::Justification::centredLeft);
-    g.setColour(proc.isIRLoaded()?kPurple:kMuted.withAlpha(.3f));
+    g.setColour(proc.isIRLoaded()?kPurple:juce::Colour(0xff2a2a34));
     g.fillEllipse((float)(W-34),(float)(Y+13),8.f,8.f);
     g.drawText("CAB",W-24,Y+10,26,14,juce::Justification::centredLeft);
 }
