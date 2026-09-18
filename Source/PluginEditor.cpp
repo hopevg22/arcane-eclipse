@@ -950,16 +950,7 @@ void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
      juce::Path st2;st2.startNewSubPath(ex-R-2,ey);st2.lineTo(ex,ey-2);st2.lineTo(ex+R+2,ey);st2.lineTo(ex,ey+2);st2.closeSubPath();
      g.setColour(juce::Colour(0xffc9a3ff)); g.fillPath(st2);
      g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(ex-1.7f,ey-1.7f,3.4f,3.4f);}
-    // AMARI LABS mark (white, artwork only) centred on the speaker grille
-    {
-        static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_white_png, BinaryData::logo_amari_mark_white_pngSize);
-        if(amariMark.isValid()){
-            float sx=(float)px(119), sy=(float)py(170);          // speaker mesh centre
-            float lw=62.f, lh=lw;                                // square, centred image
-            g.drawImage(amariMark, (int)(sx-lw/2),(int)(sy-lh/2),(int)lw,(int)lh,
-                        0,0,amariMark.getWidth(),amariMark.getHeight());
-        }
-    }
+    // (cabinet speaker logo removed — brand mark shown in the footer instead)
 }
 
 void ArcaneEclipseEditor::paintSceneBar(juce::Graphics& g){ juce::ignoreUnused(g); }
@@ -971,8 +962,8 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
     g.setGradientFill(fg); g.fillRect(0,Y,W,kFootH);
     g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
     // Lower-left: developer credit (replaces the old Input Monitor)
-    g.setFont(juce::Font(9.f).boldened()); g.setColour(kMuted);
-    g.drawText("DEVELOPED BY AMARI LABS",16,Y,240,kFootH,juce::Justification::centredLeft);
+    g.setFont(juce::Font(13.f).boldened()); g.setColour(kMuted);
+    g.drawText("DEVELOPED BY AMARI LABS",18,Y,300,kFootH,juce::Justification::centredLeft);
     // Centre: AMARI LABS mark (colour, artwork only), enlarged
     static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_color_png, BinaryData::logo_amari_mark_color_pngSize);
     if(amariMark.isValid()){

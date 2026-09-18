@@ -30,8 +30,17 @@ jobs:
           cd NeuralAudio
           git submodule update --init --recursive
 
+      - name: Download ASIO SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://download.steinberg.net/sdk_downloads/asiosdk_2.3.3_2019-06-14.zip" -OutFile asiosdk.zip
+          Expand-Archive asiosdk.zip -DestinationPath asiosdk
+          $dir = (Get-ChildItem asiosdk -Directory | Select-Object -First 1).FullName
+          echo "ASIOSDK_DIR=$dir" >> $env:GITHUB_ENV
+
       - name: Configure (CMake)
-        run: cmake -B build ${{ matrix.generator_arg }} -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-DEIGEN_DONT_VECTORIZE -DEIGEN_NO_CPUID"
+        run: cmake -B build ${{ matrix.generator_arg }} -DCMAKE_BUILD_TYPE=Release -DASIOSDK_DIR="${{ env.ASIOSDK_DIR }}" -DCMAKE_CXX_FLAGS="-DEIGEN_DONT_VECTORIZE -DEIGEN_NO_CPUID"
 
       - name: Build VST3 (Release)
         run: cmake --build build --config Release --target ArcaneEclipse_VST3

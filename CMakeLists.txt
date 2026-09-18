@@ -66,6 +66,17 @@ target_compile_definitions(ArcaneEclipse PUBLIC
     DSP_SAMPLE_FLOAT
 )
 
+# ---- ASIO support for the Standalone (Windows only) ----
+# Pass -DASIOSDK_DIR=<path-to-asiosdk> at configure time (the CI does this).
+# When present, the Standalone app gets a low-latency ASIO driver option.
+if(WIN32 AND ASIOSDK_DIR AND EXISTS "${ASIOSDK_DIR}/common/iasiodrv.h")
+    message(STATUS "ASIO SDK found at ${ASIOSDK_DIR} - enabling ASIO")
+    target_compile_definitions(ArcaneEclipse PUBLIC JUCE_ASIO=1)
+    target_include_directories(ArcaneEclipse PUBLIC "${ASIOSDK_DIR}/common")
+else()
+    message(STATUS "ASIO SDK not provided - building without ASIO")
+endif()
+
 juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/background.png
     Resources/panels/amp.png
