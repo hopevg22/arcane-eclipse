@@ -71,7 +71,7 @@ public:
                     float  delSamps = (float) (delMs * 0.001 * sr);
                     wet += readInterp (ch, delSamps);
                 }
-                wet *= (1.0f / (float) kVoices);
+                wet *= (1.0f / std::sqrt ((float) kVoices)); // RMS-preserving: keeps level steady
 
                 data[n] = dry + wetMix * (wet - dry);
             }
