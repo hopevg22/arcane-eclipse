@@ -63,9 +63,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idODLevel, "OD Level", Range(0.f,1.f,.01f),.7f));
 
     p.push_back(std::make_unique<juce::AudioParameterBool> (idModOn,    "Mod On",   false));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(idModRate,  "Mod Rate", Range(.1f,4.f,.05f),1.f,"Hz"));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idModRate,  "Mod Rate", Range(.1f,4.f,.05f),1.5f,"Hz"));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idModDepth, "Mod Depth",Range(0.f,1.f,.01f),.5f));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(idModMix,   "Mod Mix",  Range(0.f,1.f,.01f),.5f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idModMix,   "Mod Mix",  Range(0.f,1.f,.01f),.7f));
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idModType,  "Mod Type", 0, 2, 0));
 
     p.push_back(std::make_unique<juce::AudioParameterBool> (idDelayOn,       "Delay On",  false));
@@ -76,9 +76,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idDelayType,     "Delay Type",0, 3, 0));
 
     p.push_back(std::make_unique<juce::AudioParameterBool> (idReverbOn,    "Reverb On",  false));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbDecay, "Reverb Decay",Range(0.f,1.f,.01f),.4f));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idShimmerOn,   "Shimmer On", false));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbDecay, "Reverb Decay",Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbSize,  "Reverb Size", Range(0.f,1.f,.01f),.5f));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbMix,   "Reverb Mix",  Range(0.f,1.f,.01f),.3f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbMix,   "Reverb Mix",  Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idReverbType,  "Reverb Type", 0, 3, 0));
 
     return { p.begin(), p.end() };
@@ -409,6 +410,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         prevReverbOn = rvOn;
     }
     if (apvts.getRawParameterValue(idReverbOn)->load() > .5f) {
+        reverb.setShimmer(apvts.getRawParameterValue(idShimmerOn)->load() > .5f);
         reverb.setParameters(
             apvts.getRawParameterValue(idReverbDecay)->load(),
             0.f, .5f,

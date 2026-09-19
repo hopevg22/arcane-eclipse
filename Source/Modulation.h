@@ -31,7 +31,8 @@ public:
     // Signature kept: (rate, depth, mix, type) — type ignored (always chorus)
     void setParameters (float rate, float depth, float mix, int /*type*/)
     {
-        lfoRate = juce::jlimit (0.01f, 8.0f, rate);
+        // Rate remap: user sweet spot (old dial 0.2) sits at the new default dial 1.5
+        lfoRate = juce::jlimit (0.01f, 8.0f, rate * 0.133f);
         depthMs = 1.0f + juce::jlimit (0.f, 1.f, depth) * 9.0f;   // sweep +/- 1..10 ms
         wetMix  = juce::jlimit (0.f, 1.f, mix);
     }

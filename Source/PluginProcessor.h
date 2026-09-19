@@ -110,6 +110,7 @@ public:
     static constexpr auto idReverbDecay = "reverbDecay";
     static constexpr auto idReverbSize  = "reverbSize";
     static constexpr auto idReverbMix   = "reverbMix";
+    static constexpr auto idShimmerOn   = "shimmerOn";
     static constexpr auto idReverbType  = "reverbType";
 
 private:

@@ -274,6 +274,11 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
         proc.apvts, ArcaneEclipseProcessor::idStereoMode, stereoBtn);
     stereoBtn.onClick = [this]{ repaint(); };
 
+    addAndMakeVisible(shimmerBtn);
+    attShimmer = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        proc.apvts, ArcaneEclipseProcessor::idShimmerOn, shimmerBtn);
+    shimmerBtn.onClick = [this]{ repaint(); };
+
     setWantsKeyboardFocus(true);
     actLearns = {                 // direct MIDI-learn buttons
         {&bankPrev, 4}, {&bankNext, 5}, {&presetPrev, 6}, {&presetNext, 7}
@@ -671,6 +676,8 @@ juce::Rectangle<int> ArcaneEclipseEditor::chainNodeBounds(int i) const
 void ArcaneEclipseEditor::resized()
 {
     { int fY = kTopH+kStripH+kAmpH+kFXH+kSceneH; stereoBtn.setBounds(getWidth()-278, fY, 84, kFootH); }
+    { int fxY2=kTopH+kStripH+kAmpH, cW=196, st=208, rvx=10+3*st, cY=fxY2+(int)(kFXH*0.83f);
+      shimmerBtn.setBounds(rvx+cW/2-40, cY-2, 80, 20); }
     int stripY=kTopH, ampY=kTopH+kStripH, fxY=ampY+kAmpH, sceneY=fxY+kFXH;
 
     // Strip knobs
@@ -925,6 +932,19 @@ void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
         } else {
             g.setColour(juce::Colour(0xff45455c)); g.drawEllipse(dx-6,dy-6,12,12,1.4f);
         }
+    }
+    // SHIMMER on/off toggle on the reverb card
+    {
+        int rvx=10+3*stepp, cY=fxY+(int)(kFXH*0.83f);
+        bool sh=shimmerBtn.getToggleState();
+        juce::Rectangle<float> b((float)(rvx+cardW/2-40),(float)(cY-2),80.f,20.f);
+        g.setColour(sh?kPurple.withAlpha(0.9f):juce::Colour(0xff26262f));
+        g.fillRoundedRectangle(b,5.f);
+        g.setColour(sh?kPurple:juce::Colour(0xff3a3a4a));
+        g.drawRoundedRectangle(b,5.f,1.2f);
+        g.setColour(sh?juce::Colours::white:kMuted);
+        g.setFont(juce::Font(9.f).boldened());
+        g.drawText(sh?"SHIMMER ON":"SHIMMER",b.toNearestInt(),juce::Justification::centred);
     }
 }
 
