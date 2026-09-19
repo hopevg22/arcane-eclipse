@@ -263,13 +263,20 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             if ((int)namOutBuf.size() < numSamples + 8)
                 namOutBuf.assign((size_t)(numSamples + 16), 0.f);
 
+            // Mono input for the amp - consistent level whether the host feeds a
+            // mono guitar duplicated on both channels (DAW) or on a single input
+            // channel (audio interface, either input). Average only when both
+            // channels carry comparable signal; otherwise sum, so a single-channel
+            // guitar always reaches the amp at full level regardless of which input.
+            float magL = buffer.getMagnitude(0, 0, numSamples);
+            float magR = (numCh > 1) ? buffer.getMagnitude(1, 0, numSamples) : 0.f;
+            bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f
+                              && magL < magR * 4.0f && magR < magL * 4.0f);
+            float mScale = dualMono ? 0.5f : 1.0f;
             auto* L = buffer.getReadPointer(0);
-            // Guitar is a mono source. Take channel 0 (input 1) so the level is
-            // identical whether the host feeds one channel (Standalone/ASIO) or
-            // duplicates a mono guitar to both channels (DAW). Averaging both
-            // channels would halve the level when only one carries the guitar.
             for (int n = 0; n < numSamples; ++n)
-                monoBuf[(size_t)n] = L[n];
+                monoBuf[(size_t)n] = (numCh > 1)
+                    ? mScale * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
 
             namModel->Process(monoBuf.data(), namOutBuf.data(), (size_t)numSamples);
 
@@ -296,13 +303,20 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 namOutBuf.assign((size_t)(numSamples + 16), 0.f);
 
             // Mix to mono
+            // Mono input for the amp - consistent level whether the host feeds a
+            // mono guitar duplicated on both channels (DAW) or on a single input
+            // channel (audio interface, either input). Average only when both
+            // channels carry comparable signal; otherwise sum, so a single-channel
+            // guitar always reaches the amp at full level regardless of which input.
+            float magL = buffer.getMagnitude(0, 0, numSamples);
+            float magR = (numCh > 1) ? buffer.getMagnitude(1, 0, numSamples) : 0.f;
+            bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f
+                              && magL < magR * 4.0f && magR < magL * 4.0f);
+            float mScale = dualMono ? 0.5f : 1.0f;
             auto* L = buffer.getReadPointer(0);
-            // Guitar is a mono source. Take channel 0 (input 1) so the level is
-            // identical whether the host feeds one channel (Standalone/ASIO) or
-            // duplicates a mono guitar to both channels (DAW). Averaging both
-            // channels would halve the level when only one carries the guitar.
             for (int n = 0; n < numSamples; ++n)
-                monoBuf[(size_t)n] = L[n];
+                monoBuf[(size_t)n] = (numCh > 1)
+                    ? mScale * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
 
             // Upsample host -> 48kHz
             int actualUp = resamplerIn.process(
