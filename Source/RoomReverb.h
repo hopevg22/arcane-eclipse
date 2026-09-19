@@ -46,7 +46,7 @@ public:
                         float size01, float /*diffusion*/, float mod01, float mix01)
     {
         decay01=juce::jlimit(0.f,1.f,decay01); size01=juce::jlimit(0.f,1.f,size01); mix01=juce::jlimit(0.f,1.f,mix01);
-        decay   = 0.40f + decay01*0.58f;                 // 0.40 .. 0.98 (noon ~0.69, long tail)
+        decay   = 0.40f + decay01*0.52f;                 // 0.40 .. 0.92 (noon ~0.66, long but safe)
         sizeMul = 0.7f + size01*0.9f;                    // 0.7x .. 1.6x tank size
         // damping (tone -> high cut): higher tone = brighter
         float dCut = 2500.f + juce::jlimit(0.f,1.f,tone01)*9000.f;
@@ -76,13 +76,7 @@ public:
             x=apProcess(id3,379*srScale,0.625f,x);
             x=apProcess(id4,277*srScale,0.625f,x);
 
-            // shimmer injection (octave-up tail)
-            float inject=x;
-            if (shimmerOn){
-                float up=octaveUp(0.5f*(lastPostL+lastPostR));
-                shimmerLP+=0.35f*(up-shimmerLP);
-                inject += 0.55f*shimmerLP;
-            }
+            float inject=x;   // NOTE: shimmer is added in parallel at the output (no feedback -> stable)
 
             // LFOs for the modulated tank all-passes
             lfo1+=lfoInc1; if(lfo1>=1.f) lfo1-=1.f;
@@ -116,6 +110,13 @@ public:
             float yR = tap(preL,353*S)+tap(preL,3627*S)-tap(apL2,1228*S)+tap(postL,2673*S)
                        -tap(preR,2111*S)-tap(apR2,335*S)-tap(postR,121*S);
             yL*=0.6f; yR*=0.6f;
+
+            // SHIMMER: octave-up copy of the wet reverb added in parallel (no feedback)
+            if (shimmerOn){
+                float shim=octaveUp(0.5f*(yL+yR));
+                shimmerLP+=0.4f*(shim-shimmerLP);
+                yL+=0.7f*shimmerLP; yR+=0.7f*shimmerLP;
+            }
 
             chL[n]=dry*inL+wet*yL; if(chR) chR[n]=dry*inR+wet*yR;
         }
