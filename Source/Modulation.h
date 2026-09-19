@@ -1,73 +1,102 @@
 #pragma once
-#include <juce_dsp/juce_dsp.h>
+#include <juce_audio_basics/juce_audio_basics.h>
+#include <vector>
 #include <cmath>
 
-// Simple modulation effect: Chorus / Flanger / Phaser / Tremolo
+/*
+    ModulationFX — a rich multi-voice stereo chorus.
+
+    Three modulated voices per channel (LFOs spread 120 deg apart) with a
+    left/right phase offset for a wide, shimmering stereo image, in the spirit
+    of classic studio choruses (e.g. Blue Cat Chorus). RATE sets the LFO speed,
+    DEPTH the sweep amount, MIX the dry/wet blend.
+*/
 class ModulationFX
 {
 public:
-    void prepare(double sampleRate, int samplesPerBlock)
+    void prepare (double sampleRate, int /*block*/)
     {
         sr = sampleRate;
-        lfoPhase = 0.0;
-        juce::dsp::ProcessSpec spec{ sampleRate, (juce::uint32)samplesPerBlock, 2 };
-        for (auto& d : delayLine) { d.prepare(spec); d.setMaximumDelayInSamples(4096); }
+        size_t len = (size_t) (0.060 * sr) + 8;   // up to 60 ms
+        for (int ch = 0; ch < 2; ++ch) { buf[ch].assign (len, 0.f); widx[ch] = 0; }
+        phase = 0.0;
     }
 
-    void setParameters(float rate, float depth, float mix, int typeIdx)
+    void reset()
     {
-        lfoRate  = (double)rate;
-        lfoDepth = (double)depth;
-        wetMix   = mix;
-        type     = typeIdx; // 0=Chorus 1=Flanger 2=Tremolo
+        for (int ch = 0; ch < 2; ++ch) std::fill (buf[ch].begin(), buf[ch].end(), 0.f);
+        phase = 0.0;
     }
 
-    void processBlock(juce::AudioBuffer<float>& buffer)
+    // Signature kept: (rate, depth, mix, type) — type ignored (always chorus)
+    void setParameters (float rate, float depth, float mix, int /*type*/)
     {
-        int numSamples  = buffer.getNumSamples();
-        int numChannels = buffer.getNumChannels();
-        double phaseInc = lfoRate * juce::MathConstants<double>::twoPi / sr;
+        lfoRate = juce::jlimit (0.01f, 8.0f, rate);
+        depthMs = 1.0f + juce::jlimit (0.f, 1.f, depth) * 9.0f;   // sweep +/- 1..10 ms
+        wetMix  = juce::jlimit (0.f, 1.f, mix);
+    }
+
+    void processBlock (juce::AudioBuffer<float>& buffer)
+    {
+        const int numSamples  = buffer.getNumSamples();
+        const int numChannels = juce::jmin (buffer.getNumChannels(), 2);
+        const double inc = lfoRate * juce::MathConstants<double>::twoPi / sr;
+
+        const double baseMs = 18.0;
+        const double voiceOff[kVoices] = { 0.0,
+                                           juce::MathConstants<double>::twoPi / 3.0,
+                                           2.0 * juce::MathConstants<double>::twoPi / 3.0 };
 
         for (int n = 0; n < numSamples; ++n)
         {
-            double lfo = std::sin(lfoPhase);
-            lfoPhase  += phaseInc;
-            if (lfoPhase > juce::MathConstants<double>::twoPi)
-                lfoPhase -= juce::MathConstants<double>::twoPi;
+            phase += inc;
+            if (phase > juce::MathConstants<double>::twoPi) phase -= juce::MathConstants<double>::twoPi;
 
-            for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
+            for (int ch = 0; ch < numChannels; ++ch)
             {
-                float* data = buffer.getWritePointer(ch);
+                float* data = buffer.getWritePointer (ch);
                 float  dry  = data[n];
 
-                float wet = 0.f;
-                if (type == 2) // Tremolo — amplitude modulate
-                {
-                    wet = dry * (float)(1.0 - lfoDepth * 0.5 * (1.0 + lfo));
-                }
-                else // Chorus / Flanger — delay modulate
-                {
-                    float baseDelay = (type == 0) ? 20.f : 3.f; // ms
-                    float modDepth  = (type == 0) ? 15.f : 2.f;
-                    float delaySamples = (float)sr * 0.001f *
-                        (baseDelay + (float)(lfoDepth * modDepth * lfo));
-                    delaySamples = juce::jlimit(0.f, 4094.f, delaySamples);
+                buf[ch][(size_t) widx[ch]] = dry;
 
-                    delayLine[ch].pushSample(0, dry);
-                    wet = delayLine[ch].popSample(0, delaySamples, true);
+                // wide stereo: offset the right channel's LFO by 90 degrees
+                double chOff = (ch == 1) ? juce::MathConstants<double>::halfPi : 0.0;
+
+                float wet = 0.f;
+                for (int v = 0; v < kVoices; ++v)
+                {
+                    double lfo = std::sin (phase + voiceOff[v] + chOff);
+                    double delMs = baseMs + depthMs * lfo;
+                    float  delSamps = (float) (delMs * 0.001 * sr);
+                    wet += readInterp (ch, delSamps);
                 }
+                wet *= (1.0f / (float) kVoices);
 
                 data[n] = dry + wetMix * (wet - dry);
             }
+
+            for (int ch = 0; ch < numChannels; ++ch)
+                if (++widx[ch] >= (int) buf[ch].size()) widx[ch] = 0;
         }
     }
 
 private:
-    double sr = 44100.0;
-    double lfoPhase = 0.0;
-    double lfoRate  = 0.5;
-    double lfoDepth = 0.5;
-    float  wetMix   = 0.5f;
-    int    type     = 0;
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine[2];
+    static constexpr int kVoices = 3;
+
+    float readInterp (int ch, float delaySamps)
+    {
+        auto& b = buf[ch];
+        int sz = (int) b.size();
+        float readPos = (float) widx[ch] - delaySamps;
+        while (readPos < 0.f) readPos += sz;
+        int i0 = (int) readPos;
+        float frac = readPos - i0;
+        int i1 = (i0 + 1) % sz;
+        return b[(size_t) i0] + frac * (b[(size_t) i1] - b[(size_t) i0]);
+    }
+
+    double sr = 48000.0, phase = 0.0;
+    float  lfoRate = 1.0f, depthMs = 5.0f, wetMix = 0.5f;
+    std::vector<float> buf[2];
+    int widx[2] = { 0, 0 };
 };

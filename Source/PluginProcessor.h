@@ -70,6 +70,7 @@ public:
     // ── Parameter IDs ──────────────────────────────────────────────────────────
     static constexpr auto idInputGain   = "inputGain";
     static constexpr auto idOutputGain  = "outputGain";
+    static constexpr auto idStereoMode  = "stereoMode";
     static constexpr auto idNoiseGate   = "noiseGate";
     static constexpr auto idGateOn      = "gateOn";
     static constexpr auto idCabBypass   = "cabBypass";

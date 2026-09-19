@@ -269,6 +269,11 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     };
     for (auto& nl : nodeLearns) nl.comp->addMouseListener(this, false);
 
+    addAndMakeVisible(stereoBtn);
+    attStereo = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        proc.apvts, ArcaneEclipseProcessor::idStereoMode, stereoBtn);
+    stereoBtn.onClick = [this]{ repaint(); };
+
     setWantsKeyboardFocus(true);
     actLearns = {                 // direct MIDI-learn buttons
         {&bankPrev, 4}, {&bankNext, 5}, {&presetPrev, 6}, {&presetNext, 7}
@@ -665,6 +670,7 @@ juce::Rectangle<int> ArcaneEclipseEditor::chainNodeBounds(int i) const
 
 void ArcaneEclipseEditor::resized()
 {
+    { int fY = kTopH+kStripH+kAmpH+kFXH+kSceneH; stereoBtn.setBounds(getWidth()-278, fY, 84, kFootH); }
     int stripY=kTopH, ampY=kTopH+kStripH, fxY=ampY+kAmpH, sceneY=fxY+kFXH;
 
     // Strip knobs
@@ -970,6 +976,13 @@ void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
         int lh = kFootH - 4;
         int lw = (int)(lh * amariMark.getWidth() / (float)amariMark.getHeight());
         g.drawImage(amariMark, W/2 - lw/2, Y + (kFootH-lh)/2, lw, lh, 0,0,amariMark.getWidth(),amariMark.getHeight());
+    }
+    // Mono / Stereo indicator (click to toggle)
+    {
+        bool st = stereoBtn.getToggleState();
+        g.setColour(st ? kPurple : kMuted);
+        g.setFont(juce::Font(11.f).boldened());
+        g.drawText(st ? "STEREO" : "MONO", W-278, Y, 84, kFootH, juce::Justification::centred);
     }
     // Lower-right: AMP lights when a NAM model is loaded, CAB when an IR is loaded
     g.setColour(proc.isNAMLoaded()?kPurple:juce::Colour(0xff2a2a34));

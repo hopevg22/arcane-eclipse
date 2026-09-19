@@ -163,6 +163,8 @@ private:
     juce::ToggleButton tbGate{""}, tbComp{""};
     juce::ToggleButton stompOD{""}, stompMod{""}, stompDelay{""}, stompReverb{""};
     juce::ToggleButton tbCab{""}, tbTuner{""};
+    juce::ToggleButton stereoBtn{""};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attStereo;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         attGate,attComp,attOD,attMod,attDelay,attReverb,attCab;
 

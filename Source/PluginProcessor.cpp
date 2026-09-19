@@ -38,6 +38,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
 
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idInputGain,  "Input Gain",  Range(-20.f,20.f,.1f), 0.f, "dB"));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idOutputGain, "Output Gain", Range(-20.f,20.f,.1f), 0.f, "dB"));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idStereoMode, "Stereo", true));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idNoiseGate,  "Noise Gate",  Range(-80.f,-40.f,.5f),-60.f,"dB"));
     p.push_back(std::make_unique<juce::AudioParameterBool> (idGateOn,     "Gate On",     false));
     p.push_back(std::make_unique<juce::AudioParameterBool> (idCabBypass,  "Cab Bypass",  false));
@@ -415,6 +416,13 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             .72f, .45f,
             apvts.getRawParameterValue(idReverbMix)->load());
         reverb.processBlock(buffer);
+    }
+
+    // 12b. MONO / STEREO — collapse to mono when stereo mode is off
+    if (numCh > 1 && apvts.getRawParameterValue(idStereoMode)->load() < 0.5f) {
+        auto* l = buffer.getWritePointer(0);
+        auto* r = buffer.getWritePointer(1);
+        for (int n = 0; n < numSamples; ++n) { float m = 0.5f*(l[n]+r[n]); l[n]=m; r[n]=m; }
     }
 
     // 13. OUTPUT GAIN
