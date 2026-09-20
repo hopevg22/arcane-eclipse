@@ -144,7 +144,7 @@ private:
     AEKnob kODDrive,kODTone,kODLevel;
     AEKnob kModRate,kModDepth,kModMix;
     AEKnob kDTime,kDFeedback,kDMix;
-    AEKnob kRDecay,kRSize,kRMix;
+    AEKnob kRDecay,kRSize,kRMix,kRHiCut;
     std::vector<AEKnob*> allKnobs;
     struct NodeLearn { juce::Component* comp; juce::String pid; int nodeIdx; };
     std::vector<NodeLearn> nodeLearns;
@@ -165,8 +165,6 @@ private:
     juce::ToggleButton tbCab{""}, tbTuner{""};
     juce::ToggleButton stereoBtn{""};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attStereo;
-    juce::ToggleButton shimmerBtn{""};
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attShimmer;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         attGate,attComp,attOD,attMod,attDelay,attReverb,attCab;
 

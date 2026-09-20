@@ -76,7 +76,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idDelayType,     "Delay Type",0, 3, 0));
 
     p.push_back(std::make_unique<juce::AudioParameterBool> (idReverbOn,    "Reverb On",  false));
-    p.push_back(std::make_unique<juce::AudioParameterBool> (idShimmerOn,   "Shimmer On", false));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbHighCut,"Reverb High Cut",Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbDecay, "Reverb Decay",Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbSize,  "Reverb Size", Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbMix,   "Reverb Mix",  Range(0.f,1.f,.01f),.5f));
@@ -410,10 +410,10 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         prevReverbOn = rvOn;
     }
     if (apvts.getRawParameterValue(idReverbOn)->load() > .5f) {
-        reverb.setShimmer(apvts.getRawParameterValue(idShimmerOn)->load() > .5f);
         reverb.setParameters(
             apvts.getRawParameterValue(idReverbDecay)->load(),
-            0.f, .5f,
+            0.f,
+            apvts.getRawParameterValue(idReverbHighCut)->load(),
             apvts.getRawParameterValue(idReverbSize)->load(),
             .72f, .45f,
             apvts.getRawParameterValue(idReverbMix)->load());
