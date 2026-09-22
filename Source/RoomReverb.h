@@ -34,6 +34,7 @@ public:
         reverb.reset();
         for (int ch = 0; ch < 2; ++ch) std::fill (pd[ch].begin(), pd[ch].end(), 0.f);
         wetBuf.clear();
+        rvDcX[0]=rvDcX[1]=rvDcY[0]=rvDcY[1]=0.f;
     }
 
     void setShimmer (bool) {}   // shimmer removed for now (kept as no-op for API compatibility)
@@ -77,6 +78,20 @@ public:
                 if (++pdw[ch] >= sz) pdw[ch] = 0;
             }
         }
+        // High-pass the reverb input to strip DC / subsonic energy. The cab IR
+        // sits after the main DC blocker, so its low-frequency content reaches
+        // the reverb un-filtered and accumulates in the comb filters over time,
+        // eventually running the output away (loud/scratchy on hot high-gain
+        // patches). This one-pole high-pass (~23 Hz) prevents that build-up.
+        for (int ch = 0; ch < juce::jmin(nc,2); ++ch) {
+            auto* w = wetBuf.getWritePointer(ch);
+            for (int i = 0; i < n; ++i) {
+                float x = w[i];
+                float y = x - rvDcX[ch] + 0.997f * rvDcY[ch];
+                rvDcX[ch] = x; rvDcY[ch] = y;
+                w[i] = y;
+            }
+        }
         // reverberate the wet copy
         if (nc >= 2) reverb.processStereo (wetBuf.getWritePointer(0), wetBuf.getWritePointer(1), n);
         else         reverb.processMono   (wetBuf.getWritePointer(0), n);
@@ -84,7 +99,7 @@ public:
         // blend dry (original) + wet
         for (int ch = 0; ch < juce::jmin(nc,2); ++ch) {
             auto* d = buffer.getWritePointer(ch); auto* w = wetBuf.getReadPointer(ch);
-            for (int i = 0; i < n; ++i) d[i] = dryGain*d[i] + wetGain*w[i];
+            for (int i = 0; i < n; ++i) d[i] = dryGain*d[i] + wetGain*juce::jlimit(-2.0f,2.0f,w[i]);
         }
     }
 
@@ -93,6 +108,7 @@ private:
     double sampleRate = 48000.0;
     int    predelaySamps = 0;
     float  wetGain = 0.3f, dryGain = 0.7f;
+    float  rvDcX[2] = {0.f,0.f}, rvDcY[2] = {0.f,0.f};  // reverb-input DC/subsonic blocker
     std::vector<float> pd[2]; int pdw[2] = {0,0};
     juce::AudioBuffer<float> wetBuf;
 };
