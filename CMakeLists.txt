@@ -13,7 +13,7 @@ elseif (APPLE)
     # Apple Silicon (arm64) only. (Universal arm64+x86_64 fails: NeuralAudio's
     # slimmable.cpp does not cross-compile to x86_64 on the arm64 CI runner.)
     set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
 else()
     add_compile_options(-O3 -march=native)
 endif()
