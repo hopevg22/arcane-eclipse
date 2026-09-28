@@ -48,10 +48,16 @@ jobs:
       - name: Build Standalone (Release)
         run: cmake --build build --config Release --target ArcaneEclipse_Standalone
 
+      - name: Build AU (macOS only)
+        if: runner.os == 'macOS'
+        run: cmake --build build --config Release --target ArcaneEclipse_AU
+
       - name: Upload artifact (VST3 + Standalone)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
+          if-no-files-found: ignore
           path: |
             build/ArcaneEclipse_artefacts/Release/VST3/*
+            build/ArcaneEclipse_artefacts/Release/AU/*
             build/ArcaneEclipse_artefacts/Release/Standalone/*
