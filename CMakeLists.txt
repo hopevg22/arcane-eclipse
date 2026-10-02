@@ -7,6 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # --- Optimisation flags (critical for real-time NAM inference)
 if (MSVC)
     add_compile_options(/O2 /arch:AVX2)
+elseif (APPLE)
+    # macOS: -march=native is invalid on Apple clang and breaks the build.
+    add_compile_options(-O3)
+    # Apple Silicon (arm64) only; arm64 macOS requires deployment target >= 11.0.
+    set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
 else()
     add_compile_options(-O3 -march=native)
 endif()
