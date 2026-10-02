@@ -40,7 +40,7 @@ juce_add_plugin(ArcaneEclipse
     ICON_BIG            "Resources/app_icon_512.png"
     PLUGIN_MANUFACTURER_CODE Amar
     PLUGIN_CODE         NmPl
-    FORMATS             VST3 Standalone
+    FORMATS             AU VST3 Standalone
     IS_SYNTH            FALSE
     NEEDS_MIDI_INPUT    FALSE
     NEEDS_MIDI_OUTPUT   FALSE
