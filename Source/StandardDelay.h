@@ -8,13 +8,28 @@
     doesn't click or zipper.
 
     Signal path per channel:
-        input -> [+ feedback] -> delay line -> lowpass (tone) -> feedback tap
+        input -> [+ feedback] -> delay line -> lowpass (tone)
+                                             -> highpass (DC / sub block)
+                                             -> feedback tap
                                              \-> wet output (added on top of dry)
+
+    v1.0.2 fix — periodic low "kick" on the repeats:
+        The feedback loop previously had only a low-pass (tone) filter,
+        which PASSES DC and sub-bass. DC offset and subsonic energy from
+        the amp + cab were recirculated with every repeat and rode on the
+        echoes as a low-frequency thump at the delay interval.
+        Fix: a DC blocker + gentle ~85 Hz high-pass now sits in the
+        feedback path (and on the wet output), so DC/sub can no longer
+        recirculate. A denormal flush is kept as light insurance.
+        (Buffer flush on re-enable is handled in PluginProcessor, mirroring
+        the reverb, so a stale tail doesn't burst back when the delay is
+        toggled on.)
 */
 
 #pragma once
 #include <juce_dsp/juce_dsp.h>
 #include <array>
+#include <cmath>
 
 class StandardDelay
 {
@@ -35,7 +50,8 @@ public:
         smoothedDelaySamples.reset (sampleRate, 0.05); // 50ms glide on TIME changes
         smoothedDelaySamples.setCurrentAndTargetValue ((float) (sampleRate * 0.3));
 
-        for (auto& s : damperState) s = 0.0f;
+        // One-pole high-pass coefficient for the feedback DC/sub blocker (~85 Hz).
+        hpCoeff = std::exp (-2.0f * juce::MathConstants<float>::pi * 85.0f / (float) sampleRate);
 
         reset();
     }
@@ -44,6 +60,7 @@ public:
     {
         for (auto& line : delayLines) line.reset();
         for (auto& s : damperState) s = 0.0f;
+        for (auto& s : hpState)     s = 0.0f;
     }
 
     // timeMs: delay time in ms. feedback01/tone01/level01: 0..1. bypassed: true bypass.
@@ -75,20 +92,37 @@ public:
                 delayLines[(size_t) ch].setDelay (delaySamples);
                 float delayed = delayLines[(size_t) ch].popSample (0);
 
-                // damping (one-pole lowpass) in the feedback path — this is
-                // what gives the TONE control its darker/brighter repeats
-                damperState[(size_t) ch] = delayed * (1.0f - dampCoeff) + damperState[(size_t) ch] * dampCoeff;
+                // 1) Tone: one-pole low-pass (darker/brighter repeats).
+                damperState[(size_t) ch] = delayed * (1.0f - dampCoeff)
+                                         + damperState[(size_t) ch] * dampCoeff;
+                float toned = flush (damperState[(size_t) ch]);
 
-                float toWrite = dry + damperState[(size_t) ch] * feedback;
+                // 2) DC / sub blocker: one-pole high-pass (~85 Hz) in the loop.
+                //    HP = signal - lowpass(signal). Stops DC and subsonic
+                //    energy from recirculating and building into a thump.
+                hpState[(size_t) ch] = toned * (1.0f - hpCoeff)
+                                     + hpState[(size_t) ch] * hpCoeff;
+                float cleaned = flush (toned - hpState[(size_t) ch]);
+
+                // Recirculate and output the cleaned (thump-free) signal.
+                float toWrite = dry + cleaned * feedback;
                 delayLines[(size_t) ch].pushSample (0, toWrite);
 
-                float wet = bypassed ? 0.0f : damperState[(size_t) ch] * level;
+                float wet = bypassed ? 0.0f : cleaned * level;
                 data[n] = dry + wet;
             }
         }
     }
 
 private:
+    // Flush denormals / non-finite values to zero (belt-and-suspenders; the
+    // processor already wraps processBlock in juce::ScopedNoDenormals).
+    static inline float flush (float x) noexcept
+    {
+        if (! std::isfinite (x) || std::fabs (x) < 1.0e-15f) return 0.0f;
+        return x;
+    }
+
     double sampleRate = 44100.0;
 
     std::array<juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>, 2> delayLines
@@ -96,8 +130,10 @@ private:
           juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> { 1 << 18 } };
 
     std::array<float, 2> damperState { 0.0f, 0.0f };
+    std::array<float, 2> hpState     { 0.0f, 0.0f };
     juce::SmoothedValue<float> smoothedDelaySamples;
 
     float feedback = 0.35f, level = 0.5f, dampCoeff = 0.3f;
+    float hpCoeff = 0.99f;
     bool bypassed = true;
 };

@@ -135,6 +135,7 @@ private:
     float gateEnvelope = 0.f;
     float dcX1[2] = {0.f,0.f}, dcY1[2] = {0.f,0.f};  // DC blocker state
     bool  prevReverbOn = false;                     // reset reverb tail on enable
+    bool  prevDelayOn  = false;                     // reset delay buffer on enable (v1.0.2)
 
     // MIDI learn state
     std::vector<juce::String> learnParamIDs;

@@ -394,6 +394,11 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     }
 
     // 11. DELAY
+    {
+        bool dlOn = apvts.getRawParameterValue(idDelayOn)->load() > .5f;
+        if (dlOn && ! prevDelayOn) delay.reset();   // clear stale tail on enable (v1.0.2)
+        prevDelayOn = dlOn;
+    }
     if (apvts.getRawParameterValue(idDelayOn)->load() > .5f) {
         delay.setParameters(
             apvts.getRawParameterValue(idDelayTime)->load(),

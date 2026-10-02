@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ArcaneEclipse VERSION 1.0.1)
+project(ArcaneEclipse VERSION 1.0.2)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,13 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # --- Optimisation flags (critical for real-time NAM inference)
 if (MSVC)
     add_compile_options(/O2 /arch:AVX2)
-elseif (APPLE)
-    # macOS: -march=native is invalid on Apple clang and breaks universal builds.
-    add_compile_options(-O3)
-    # Apple Silicon (arm64) only. (Universal arm64+x86_64 fails: NeuralAudio's
-    # slimmable.cpp does not cross-compile to x86_64 on the arm64 CI runner.)
-    set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
 else()
     add_compile_options(-O3 -march=native)
 endif()
@@ -41,7 +34,7 @@ juce_add_plugin(ArcaneEclipse
     ICON_BIG            "Resources/app_icon_512.png"
     PLUGIN_MANUFACTURER_CODE Amar
     PLUGIN_CODE         NmPl
-    FORMATS             AU VST3 Standalone
+    FORMATS             VST3 Standalone
     IS_SYNTH            FALSE
     NEEDS_MIDI_INPUT    FALSE
     NEEDS_MIDI_OUTPUT   FALSE
