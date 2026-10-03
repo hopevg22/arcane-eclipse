@@ -36,14 +36,23 @@ public:
     void getStateInformation(juce::MemoryBlock&) override;
     void setStateInformation(const void*, int) override;
 
-    bool loadNAMModel(const juce::File& f);
-    bool loadIR(const juce::File& f);
-    void unloadNAMModel() { const juce::ScopedLock lock(getCallbackLock()); namModel.reset(); loadedNAMName = ""; }
-    void unloadIR()       { irLoaded = false; loadedIRName = ""; convolution.reset(); }
-    juce::String getLoadedNAMName() const { return loadedNAMName; }
-    juce::String getLoadedIRName()  const { return loadedIRName; }
-    bool isNAMLoaded() const { return namModel != nullptr; }
-    bool isIRLoaded()  const { return irLoaded; }
+    // ── Amp slots (v1.1 Dual Amp/IR) ─────────────────────────────────────────
+    // Slot 0 = amp 1 (always used), slot 1 = amp 2 (used when Dual is on).
+    static constexpr int kNumAmpSlots = 2;
+    bool loadNAMModel(const juce::File& f, int slot = 0);
+    bool loadIR(const juce::File& f, int slot = 0);
+    // .nam or .aecap (an .aecap may also carry its own IR). Returns false + error on failure.
+    bool loadModelAny(const juce::File& f, int slot, juce::String& error);
+    void unloadNAMModel(int slot = 0);
+    void unloadIR(int slot = 0);
+    juce::String getLoadedNAMName(int slot = 0) const { return amps[slotIdx(slot)].namName; }
+    juce::String getLoadedIRName (int slot = 0) const { return amps[slotIdx(slot)].irName; }
+    juce::String getNAMPath(int slot = 0) const { return amps[slotIdx(slot)].namPath; }
+    juce::String getIRPath (int slot = 0) const { return amps[slotIdx(slot)].irPath; }
+    bool isNAMLoaded(int slot = 0) const { return amps[slotIdx(slot)].model != nullptr; }
+    bool isIRLoaded (int slot = 0) const { return amps[slotIdx(slot)].irLoaded; }
+    bool isDualActive() const;          // Dual on AND amp 2 has a model or an IR
+    static juce::File aecapCacheDir();
 
     // MIDI learn
     void midiLearnStart(const juce::String& paramID);
@@ -113,18 +122,29 @@ public:
     static constexpr auto idReverbHighCut = "reverbHighCut";
     static constexpr auto idReverbType  = "reverbType";
     static constexpr auto idReverbShimmer = "reverbShimmer";   // v1.1 octave-up layer
+    // Dual Amp/IR (v1.1)
+    static constexpr auto idDualOn  = "dualOn";
+    static constexpr auto idDualMix = "dualMix";      // 0 = amp 1 only, 1 = amp 2 only
 
 private:
-    std::unique_ptr<NeuralAudio::NeuralModel> namModel;
+    // One amp = NAM model (+ its own 48 kHz resamplers) + cabinet IR.
+    struct AmpSlot {
+        std::unique_ptr<NeuralAudio::NeuralModel> model;
+        juce::CatmullRomInterpolator rsIn, rsOut;
+        std::vector<float> upIn, upOut;          // 48 kHz work buffers
+        juce::dsp::Convolution conv;
+        bool irLoaded = false;
+        juce::String namName, irName, namPath, irPath;
+    };
+    AmpSlot amps[kNumAmpSlots];
+    static int slotIdx(int s) { return juce::jlimit(0, kNumAmpSlots - 1, s); }
+    void runNAM(AmpSlot& a, const float* in, float* out, int numSamples);
     NeuralAudio::NeuralModelLoader namLoader;
-    juce::String loadedNAMName, loadedIRName;
-    bool irLoaded = false;
 
-    juce::CatmullRomInterpolator resamplerIn, resamplerOut;
     double currentSampleRate = 44100.0;
-    std::vector<float> resampleBufIn, resampleBufOut, monoBuf, namOutBuf;
-
-    juce::dsp::Convolution convolution;
+    std::vector<float> monoBuf, namOutBuf;
+    juce::AudioBuffer<float> dualBuf[kNumAmpSlots];          // per-amp stereo scratch (dual mode)
+    juce::SmoothedValue<float> dualMixSm { 0.5f };
     OpticalCompressor compressor;
     TubeScreamerDrive overdrive;
     ModulationFX      modulation;
@@ -133,6 +153,8 @@ private:
 
     juce::dsp::IIR::Filter<float> bassFilter[2], midFilter[2], trebleFilter[2], presenceFilter[2];
     void updateEQ();
+    float  eqLastB=-999.f, eqLastM=-999.f, eqLastT=-999.f, eqLastP=-999.f;   // updateEQ change cache
+    double eqLastSR=0.0;
     float gateEnvelope = 0.f;
     float dcX1[2] = {0.f,0.f}, dcY1[2] = {0.f,0.f};  // DC blocker state
     bool  prevReverbOn = false;                     // reset reverb tail on enable

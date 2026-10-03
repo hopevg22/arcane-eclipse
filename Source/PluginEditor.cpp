@@ -1,5 +1,4 @@
 #include "PluginEditor.h"
-#include "AecapLoader.h"
 #include <BinaryData.h>
 #include <cmath>
 
@@ -92,6 +91,21 @@ void AELAF::drawRotarySlider(juce::Graphics& g,int x,int y,int w,int h,
                 .rotated(ang, c.x, c.y);
     g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
     g.drawImageTransformed(knob, tr, false);
+}
+void AELAF::drawLinearSlider(juce::Graphics& g,int x,int y,int w,int h,
+                             float pos,float,float,juce::Slider::SliderStyle,juce::Slider&)
+{
+    // Dual Amp/IR MIX: amp 1 (left, lilac) <-> amp 2 (right, purple)
+    float cy=y+h*0.68f, th=3.f;
+    auto track=juce::Rectangle<float>((float)x+4.f,cy-th*0.5f,(float)w-8.f,th);
+    g.setColour(juce::Colour(0xcc0c0912)); g.fillRoundedRectangle(track.expanded(2.f),3.f);
+    juce::ColourGradient cg(juce::Colour(0xffc9a3ff),track.getX(),cy,kPurple,track.getRight(),cy,false);
+    g.setGradientFill(cg); g.fillRoundedRectangle(track,1.5f);
+    float r=juce::jmin(6.f,h*0.26f);
+    g.setColour(kPurple.withAlpha(0.28f)); g.fillEllipse(pos-r*1.35f,cy-r*1.35f,r*2.7f,r*2.7f);
+    g.setColour(juce::Colour(0xff1a1622)); g.fillEllipse(pos-r,cy-r,2*r,2*r);
+    g.setColour(kPurple);                  g.drawEllipse(pos-r,cy-r,2*r,2*r,1.6f);
+    g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(pos-r*0.35f,cy-r*0.35f,r*0.7f,r*0.7f);
 }
 void AELAF::drawLabel(juce::Graphics& g,juce::Label& l){
     auto txt=l.getText(); auto f=l.getFont(); auto j=l.getJustificationType();
@@ -343,15 +357,27 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     // MODEL / IR fields act as dropdowns (load / clear)
     makeHotspot(fieldModel,5.f); fieldModel.onClick=[this]{ showFieldMenu(false); }; addAndMakeVisible(fieldModel);
     makeHotspot(fieldIR,5.f);    fieldIR.onClick   =[this]{ showFieldMenu(true);  }; addAndMakeVisible(fieldIR);
-    // DUAL AMP/IR is in the v1.1 render but its engine isn't built yet
+    // DUAL AMP/IR: run two amp+IR sets in parallel and blend them (v1.1)
     makeHotspot(dualBtn,6.f);
-    dualBtn.setTooltip("Dual Amp / IR - coming in a later update");
-    dualBtn.onClick=[this]{
-        juce::PopupMenu m;
-        m.addItem(1,"Dual Amp / IR is coming in a later update",false);
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&dualBtn));
-    };
+    dualBtn.setClickingTogglesState(true);
+    dualBtn.setTooltip("Dual Amp/IR: run two amp + IR sets side by side and blend them with MIX");
+    attDual=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts,ArcaneEclipseProcessor::idDualOn,dualBtn);
+    dualBtn.onClick=[this]{ updateDualUI(); repaint(); };
     addAndMakeVisible(dualBtn);
+    for(int i=0;i<2;++i){
+        makeHotspot(ampSelBtn[i],5.f);
+        ampSelBtn[i].setTooltip(i==0?"Edit amp 1 (model + IR)":"Edit amp 2 (model + IR)");
+        ampSelBtn[i].onClick=[this,i]{ editAmp=i; repaint(); };
+        addChildComponent(ampSelBtn[i]);
+    }
+    dualMix.setLookAndFeel(&laf);
+    dualMix.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    dualMix.setTooltip("Blend between amp 1 and amp 2");
+    dualMix.setDoubleClickReturnValue(true,0.5);
+    attDualMix=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        p.apvts,ArcaneEclipseProcessor::idDualMix,dualMix);
+    addChildComponent(dualMix);
 
     addAndMakeVisible(btnLoadModel);
     btnLoadModel.onClick=[this]{
@@ -365,7 +391,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
         chooserIR=std::make_unique<juce::FileChooser>("Load IR",
             juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.wav");
         chooserIR->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadIR(r[0]);curIRPath=r[0].getFullPathName();repaint();}});
+            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadIR(r[0],editSlot());repaint();}});
     };
     makeHotspot(btnLoadModel,6.f); makeHotspot(btnLoadIR,6.f);
 
@@ -438,6 +464,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
 
     loadPresets();
     refreshSceneButtons();
+    updateDualUI();
     startTimerHz(15);
 
     // License check — show activation dialog if not licensed
@@ -482,6 +509,7 @@ void ArcaneEclipseEditor::timerCallback()
     }
     vuIn  = juce::jmax(vuIn  * 0.80f, juce::jlimit(0.f,1.f, proc.inLevel.load()));
     vuOut = juce::jmax(vuOut * 0.80f, juce::jlimit(0.f,1.f, proc.outLevel.load()));
+    updateDualUI();
     repaint();
 }
 
@@ -633,6 +661,8 @@ void ArcaneEclipseEditor::savePresets()
         e->setAttribute("name", scenes[i].name);
         e->setAttribute("nam",  scenes[i].namPath);
         e->setAttribute("ir",   scenes[i].irPath);
+        e->setAttribute("nam2", scenes[i].namPath2);
+        e->setAttribute("ir2",  scenes[i].irPath2);
         if (scenes[i].params.isValid())
             if (auto px = scenes[i].params.createXml())
                 e->addChildElement(px.release());
@@ -654,6 +684,8 @@ void ArcaneEclipseEditor::loadPresets()
         scenes[i].name    = e->getStringAttribute("name", "Empty");
         scenes[i].namPath = e->getStringAttribute("nam");
         scenes[i].irPath  = e->getStringAttribute("ir");
+        scenes[i].namPath2= e->getStringAttribute("nam2");
+        scenes[i].irPath2 = e->getStringAttribute("ir2");
         if (auto* px = e->getFirstChildElement())
             scenes[i].params = juce::ValueTree::fromXml(*px);
     }
@@ -685,9 +717,11 @@ void ArcaneEclipseEditor::renameScene(int slot){
 
 // ── Scene save/load ───────────────────────────────────────────────────────────
 void ArcaneEclipseEditor::saveScene(int slot){
-    scenes[slot].namPath = curNAMPath;
-    scenes[slot].irPath  = curIRPath;
-    scenes[slot].params  = proc.apvts.copyState();
+    scenes[slot].namPath  = proc.getNAMPath(0);
+    scenes[slot].irPath   = proc.getIRPath(0);
+    scenes[slot].namPath2 = proc.getNAMPath(1);
+    scenes[slot].irPath2  = proc.getIRPath(1);
+    scenes[slot].params   = proc.apvts.copyState();
     if(scenes[slot].name=="Empty") scenes[slot].name = slotCode(slot);
     activeScene=slot;
     savePresets();
@@ -695,66 +729,58 @@ void ArcaneEclipseEditor::saveScene(int slot){
 void ArcaneEclipseEditor::resetToDefault(){
     for (auto* prm : proc.getParameters())
         prm->setValueNotifyingHost(prm->getDefaultValue());
-    if(curNAMPath.isNotEmpty()){ proc.unloadNAMModel(); curNAMPath={}; }
-    if(curIRPath.isNotEmpty()) { proc.unloadIR();       curIRPath={}; }
+    for(int a=0;a<ArcaneEclipseProcessor::kNumAmpSlots;++a){
+        if(proc.isNAMLoaded(a)) proc.unloadNAMModel(a);
+        if(proc.isIRLoaded(a))  proc.unloadIR(a);
+    }
+    editAmp=0; updateDualUI();
     repaint();
 }
 void ArcaneEclipseEditor::loadScene(int slot){
     if(scenes[slot].isEmpty()){ resetToDefault(); activeScene=slot; return; }
-    if(scenes[slot].params.isValid())
+    if(scenes[slot].params.isValid()){
         proc.apvts.replaceState(scenes[slot].params);
-    // Recall the scene's model (.nam or .aecap). loadModelPath also loads an
-    // embedded IR when the path is a .aecap.
-    if(scenes[slot].namPath != curNAMPath){
-        if(scenes[slot].namPath.isNotEmpty() && juce::File(scenes[slot].namPath).existsAsFile())
-            loadModelPath(juce::File(scenes[slot].namPath));
-        else
-            proc.unloadNAMModel();
-        curNAMPath = scenes[slot].namPath;
+        // Scenes saved before v1.1 carry no Dual settings: start them in single-amp mode
+        if(! scenes[slot].params.getChildWithProperty("id",ArcaneEclipseProcessor::idDualOn).isValid())
+            if(auto* d=proc.apvts.getParameter(ArcaneEclipseProcessor::idDualOn)) d->setValueNotifyingHost(0.f);
     }
-    // Recall the scene's IR — only when it's a SEPARATE file (an .aecap carries
-    // its own IR, loaded above; in that case irPath == namPath, so skip here).
-    if(scenes[slot].irPath != curIRPath){
-        if(scenes[slot].irPath.isNotEmpty() && scenes[slot].irPath != scenes[slot].namPath
-           && juce::File(scenes[slot].irPath).existsAsFile())
-            proc.loadIR(juce::File(scenes[slot].irPath));
-        else if(scenes[slot].irPath.isEmpty())
-            proc.unloadIR();
-        curIRPath = scenes[slot].irPath;
+    // Recall each amp's model (.nam or .aecap - an .aecap may carry its own IR,
+    // in which case its IR path equals its model path) and its separate IR.
+    const juce::String namP[2]={scenes[slot].namPath, scenes[slot].namPath2};
+    const juce::String irP [2]={scenes[slot].irPath,  scenes[slot].irPath2};
+    for(int a=0;a<ArcaneEclipseProcessor::kNumAmpSlots;++a){
+        if(namP[a]!=proc.getNAMPath(a)){
+            juce::String err;
+            if(namP[a].isNotEmpty() && juce::File(namP[a]).existsAsFile()) proc.loadModelAny(juce::File(namP[a]),a,err);
+            else proc.unloadNAMModel(a);
+        }
+        if(irP[a]!=proc.getIRPath(a)){
+            if(irP[a].isNotEmpty() && irP[a]!=namP[a] && juce::File(irP[a]).existsAsFile()) proc.loadIR(juce::File(irP[a]),a);
+            else if(irP[a].isEmpty()) proc.unloadIR(a);
+        }
     }
     activeScene=slot;
+    updateDualUI();
 }
 
-// ── Model loading: .nam direct, or .aecap (unpack model + optional IR) ──────────
-juce::File ArcaneEclipseEditor::aecapCacheDir() const {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-             .getChildFile("ArcaneEclipse").getChildFile("aecap_cache");
-}
-bool ArcaneEclipseEditor::loadModelPath(const juce::File& f){
-    if(f.getFileExtension().equalsIgnoreCase(".aecap")){
-        auto c = AecapLoader::loadFile(f);
-        if(!c.ok){
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                "Arcane Eclipse", "Could not open .aecap:\n" + c.error);
-            return false;
-        }
-        auto nam = c.materializeModelTo(aecapCacheDir());
-        if(nam.existsAsFile()) proc.loadNAMModel(nam);
-        if(c.hasIR){
-            auto irf = aecapCacheDir().getChildFile("aecap_"
-                        + juce::String(juce::Time::getHighResolutionTicks()) + ".wav");
-            if(irf.replaceWithData(c.irWav.getData(), c.irWav.getSize())){ proc.loadIR(irf); return true; }
-        }
-        return false;
-    }
-    proc.loadNAMModel(f);
-    return false;
+// ── Model loading: .nam or .aecap into the amp currently being edited ─────────
+int ArcaneEclipseEditor::editSlot() const {
+    bool dualOn = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    return dualOn ? editAmp : 0;
 }
 void ArcaneEclipseEditor::loadModelFile(const juce::File& f){
-    bool loadedIR = loadModelPath(f);
-    curNAMPath = f.getFullPathName();
-    if(loadedIR) curIRPath = f.getFullPathName();   // .aecap IR source == the .aecap itself
+    juce::String err;
+    if(! proc.loadModelAny(f, editSlot(), err) && err.isNotEmpty())
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Arcane Eclipse", "Could not open " + f.getFileName() + ":\n" + err);
     repaint();
+}
+void ArcaneEclipseEditor::updateDualUI(){
+    if(tunerVisible) return;                      // tuner owns visibility while open
+    bool on = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    if(!on) editAmp=0;
+    for(auto& b:ampSelBtn) if(b.isVisible()!=on) b.setVisible(on);
+    if(dualMix.isVisible()!=on) dualMix.setVisible(on);
 }
 
 // ── Per-slot export / import (.aetone = a single-slot preset file) ──────────────
@@ -764,6 +790,8 @@ void ArcaneEclipseEditor::exportScene(int slot){
     t.setProperty("name", scenes[slot].name, nullptr);
     t.setProperty("nam",  scenes[slot].namPath, nullptr);
     t.setProperty("ir",   scenes[slot].irPath, nullptr);
+    t.setProperty("nam2", scenes[slot].namPath2, nullptr);
+    t.setProperty("ir2",  scenes[slot].irPath2, nullptr);
     if(scenes[slot].params.isValid()) t.appendChild(scenes[slot].params.createCopy(), nullptr);
     auto xml = t.toXmlString();
     chooserExport=std::make_unique<juce::FileChooser>("Export Tone",
@@ -787,6 +815,8 @@ void ArcaneEclipseEditor::importScene(int slot){
             scenes[slot].name    = t.getProperty("name", slotCode(slot)).toString();
             scenes[slot].namPath = t.getProperty("nam","").toString();
             scenes[slot].irPath  = t.getProperty("ir","").toString();
+            scenes[slot].namPath2= t.getProperty("nam2","").toString();
+            scenes[slot].irPath2 = t.getProperty("ir2","").toString();
             if(t.getNumChildren()>0) scenes[slot].params = t.getChild(0).createCopy();
             savePresets(); loadScene(slot); refreshSceneButtons(); repaint();
         });
@@ -854,6 +884,10 @@ void ArcaneEclipseEditor::resized()
     fieldModel  .setBounds(RR(1291,649,1471,687));
     fieldIR     .setBounds(RR(1291,707,1471,745));
     dualBtn     .setBounds(RR(1291,763,1470,800));
+    // Dual row (shown only while Dual is on): [1] ---MIX--- [2]
+    ampSelBtn[0].setBounds(RR(1291,806,1323,832));
+    ampSelBtn[1].setBounds(RR(1438,806,1470,832));
+    dualMix     .setBounds(RR(1330,806,1431,832));
     btnLoadModel.setBounds(RR(1087,840,1271,877));
     btnLoadIR   .setBounds(RR(1291,840,1469,877));
 
@@ -908,6 +942,12 @@ void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
         float fs=juce::jlimit(8.f,11.f,b.getWidth()*0.22f);
         haloText(g,s.getTextFromValue(s.getValue()),juce::Font(fs).boldened(),juce::Colours::white,
                  b.withSizeKeepingCentre(b.getWidth()+20,(int)fs+4),juce::Justification::centred);
+    }
+
+    if(dualMix.isVisible() && dualMix.isMouseOverOrDragging()){
+        auto lb=dualMix.getBounds().withHeight(juce::roundToInt(SY(11.f))).translated(0,-juce::roundToInt(SY(3.f)));
+        haloText(g,dualMix.getTextFromValue(dualMix.getValue()),juce::Font(SY(11.f)).boldened(),juce::Colours::white,
+                 lb.expanded(10,0),juce::Justification::centred);
     }
 
     if(learningID.isEmpty() && learningAction<0) return;
@@ -985,7 +1025,8 @@ void ArcaneEclipseEditor::paintVU(juce::Graphics& g,juce::Rectangle<float> b,flo
 void ArcaneEclipseEditor::paintChainLive(juce::Graphics& g)
 {
     bool act[9]={ tbGate.getToggleState(), tbComp.getToggleState(), stompOD.getToggleState(),
-                  proc.isNAMLoaded(), proc.isIRLoaded(), true,
+                  proc.isNAMLoaded(0) || (proc.isDualActive() && proc.isNAMLoaded(1)),
+                  proc.isIRLoaded(0)  || (proc.isDualActive() && proc.isIRLoaded(1)), true,
                   stompMod.getToggleState(), stompDelay.getToggleState(), stompReverb.getToggleState() };
     // Baked indicator bulbs on GATE, COMP, DELAY, REVERB
     static const float ledX[9]={396,487,-1,-1,-1,-1,-1,1025,1117};
@@ -1074,29 +1115,67 @@ void ArcaneEclipseEditor::paintPedalsLive(juce::Graphics& g)
 
 void ArcaneEclipseEditor::showFieldMenu(bool ir)
 {
-    bool loaded = ir ? proc.isIRLoaded() : proc.isNAMLoaded();
+    const int a = editSlot();
+    bool loaded = ir ? proc.isIRLoaded(a) : proc.isNAMLoaded(a);
     juce::PopupMenu m;
-    if(loaded) m.addSectionHeader(ir ? proc.getLoadedIRName() : proc.getLoadedNAMName());
-    m.addItem(1, ir ? "Load IR..." : "Load model...");
-    m.addItem(2, ir ? "Clear IR" : "Clear model", loaded);
+    if(loaded) m.addSectionHeader(ir ? proc.getLoadedIRName(a) : proc.getLoadedNAMName(a));
+    const bool dualOn = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    juce::String who = dualOn ? (a==0 ? " (amp 1)" : " (amp 2)") : juce::String();
+    m.addItem(1, (ir ? "Load IR..." : "Load model...") + who);
+    m.addItem(2, (ir ? "Clear IR" : "Clear model") + who, loaded);
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(ir ? &fieldIR : &fieldModel),
-        [this,ir](int r){
+        [this,ir,a](int r){
             if(r==1){ if(ir) btnLoadIR.onClick(); else btnLoadModel.onClick(); }
-            else if(r==2){
-                if(ir){ proc.unloadIR(); curIRPath.clear(); }
-                else  { proc.unloadNAMModel(); curNAMPath.clear(); }
-                repaint();
-            }
+            else if(r==2){ if(ir) proc.unloadIR(a); else proc.unloadNAMModel(a); repaint(); }
         });
 }
 
 void ArcaneEclipseEditor::paintCabLive(juce::Graphics& g)
 {
+    const bool dualOn = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    const int a = editSlot();
+
+    // MODEL / IR names for the amp being edited
     auto f=juce::Font(SY(13.f));
-    juce::String mv=proc.isNAMLoaded()?proc.getLoadedNAMName():juce::String("No model loaded");
-    haloText(g,mv,f,proc.isNAMLoaded()?kText:kMuted,RR(1302,667,1440,685),juce::Justification::centredLeft);
-    juce::String iv=proc.isIRLoaded()?proc.getLoadedIRName():juce::String("No IR loaded");
-    haloText(g,iv,f,proc.isIRLoaded()?kText:kMuted,RR(1302,726,1440,744),juce::Justification::centredLeft);
+    juce::String mv=proc.isNAMLoaded(a)?proc.getLoadedNAMName(a):juce::String("No model loaded");
+    haloText(g,mv,f,proc.isNAMLoaded(a)?kText:kMuted,RR(1302,667,1440,685),juce::Justification::centredLeft);
+    juce::String iv=proc.isIRLoaded(a)?proc.getLoadedIRName(a):juce::String("No IR loaded");
+    haloText(g,iv,f,proc.isIRLoaded(a)?kText:kMuted,RR(1302,726,1440,744),juce::Justification::centredLeft);
+
+    // Amp-number chips next to the baked MODEL / IR labels (dual only)
+    auto chip=[&](float rx,float ry){
+        auto r=RF(rx,ry-6.5f,rx+15.f,ry+6.5f);
+        g.setColour(kPurple); g.fillRoundedRectangle(r,r.getHeight()*0.5f);
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(SY(10.5f)).boldened());
+        g.drawText(juce::String(a+1),r,juce::Justification::centred,false);
+    };
+    if(dualOn){ chip(1349.f,661.f); chip(1317.f,720.f); }
+
+    // DUAL AMP/IR button: the render shows it "on"; dim it + its lamp when off
+    if(dualOn) ledGlow(g,1446.f,782.f,4.2f);
+    else {
+        auto r=RF(1291,763,1470,800);
+        g.setColour(juce::Colours::black.withAlpha(0.45f)); g.fillRoundedRectangle(r,SX(7.f));
+        g.setColour(juce::Colour(0xff15121c)); g.fillEllipse(RF(1441,777,1451,787));
+    }
+
+    // [1] --MIX-- [2]
+    if(dualOn){
+        for(int i=0;i<2;++i){
+            auto r=ampSelBtn[i].getBounds().toFloat().reduced(0.5f);
+            bool sel=(editAmp==i);
+            bool has=proc.isNAMLoaded(i)||proc.isIRLoaded(i);
+            g.setColour(sel?kPurple.withAlpha(0.30f):juce::Colour(0xcc0c0912)); g.fillRoundedRectangle(r,5.f);
+            g.setColour(sel?kPurple:kPurple.withAlpha(0.40f));                  g.drawRoundedRectangle(r,5.f,sel?1.5f:1.f);
+            g.setFont(juce::Font(SY(15.f)).boldened());
+            g.setColour(sel?juce::Colours::white:(has?juce::Colour(0xffd8c8ec):kMuted));
+            g.drawText(juce::String(i+1),r,juce::Justification::centred,false);
+        }
+        if(! dualMix.isMouseOverOrDragging())      // value replaces the label while adjusting
+            haloText(g,"MIX",juce::Font(SY(9.5f)).boldened(),kMuted,
+                     dualMix.getBounds().withHeight(juce::roundToInt(SY(11.f))).translated(0,-juce::roundToInt(SY(3.f))),
+                     juce::Justification::centred);
+    }
 }
 
 void ArcaneEclipseEditor::paintScenesLive(juce::Graphics& g)
@@ -1128,8 +1207,9 @@ void ArcaneEclipseEditor::paintFooterLive(juce::Graphics& g)
     g.setColour(st?kPurple:kMuted);
     g.drawText(st?"STEREO":"MONO",RR(1262,998,1336,1019),juce::Justification::centredRight,false);
     // AMP / CAB status lamps (baked rings light up when a model / IR is loaded)
-    if(proc.isNAMLoaded()) ledGlow(g,1365.f,1008.f,4.f);
-    if(proc.isIRLoaded())  ledGlow(g,1443.f,1008.f,4.f);
+    bool d2=proc.isDualActive();
+    if(proc.isNAMLoaded(0) || (d2 && proc.isNAMLoaded(1))) ledGlow(g,1365.f,1008.f,4.f);
+    if(proc.isIRLoaded(0)  || (d2 && proc.isIRLoaded(1)))  ledGlow(g,1443.f,1008.f,4.f);
 }
 
 void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)

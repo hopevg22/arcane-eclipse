@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include <cmath>
 #include "PluginEditor.h"
+#include "AecapLoader.h"
 
 ArcaneEclipseProcessor::ArcaneEclipseProcessor()
     : AudioProcessor(BusesProperties()
@@ -16,14 +17,16 @@ ArcaneEclipseProcessor::ArcaneEclipseProcessor()
         idDelayTime, idDelayFeedback, idDelayMix,
         idReverbDecay, idReverbSize, idReverbMix,
         // on/off toggles (for footswitch MIDI learn)
-        idGateOn, idCompOn, idODOn, idModOn, idDelayOn, idReverbOn
+        idGateOn, idCompOn, idODOn, idModOn, idDelayOn, idReverbOn,
+        // v1.1 dual amp/IR (appended so existing mappings keep their slots)
+        idDualMix, idDualOn
     };
     for (auto& id : learnParamIDs) learnParamPtrs.push_back(apvts.getParameter(id));
     learnIsToggle.assign(learnParamIDs.size(), false);
     for (int i = 0; i < (int) learnParamIDs.size(); ++i) {
         auto& id = learnParamIDs[i];
         if (id == idGateOn || id == idCompOn || id == idODOn ||
-            id == idModOn  || id == idDelayOn || id == idReverbOn)
+            id == idModOn  || id == idDelayOn || id == idReverbOn || id == idDualOn)
             learnIsToggle[i] = true;
     }
     for (auto& c : ccMap) c.store(-1);
@@ -83,6 +86,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idReverbType,  "Reverb Type", 0, 3, 0));
     p.push_back(std::make_unique<juce::AudioParameterBool> (idReverbShimmer, "Shimmer", false));
 
+    // Dual Amp/IR (v1.1): blend amp 1 (0) <-> amp 2 (1); shown as "70 / 30"
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idDualOn, "Dual Amp/IR", false));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idDualMix, "Dual Mix", Range(0.f,1.f,.01f), .5f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int){
+            int b = juce::roundToInt(v * 100.f); return juce::String(100 - b) + " / " + juce::String(b); })));
+
     return { p.begin(), p.end() };
 }
 
@@ -96,12 +105,17 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 {
     currentSampleRate = sampleRate;
     juce::dsp::ProcessSpec spec{ sampleRate, (juce::uint32)samplesPerBlock, 2 };
-    convolution.prepare(spec); convolution.reset();
-    resampleBufIn .assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
-    resampleBufOut.assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+    for (auto& a : amps) {
+        a.conv.prepare(spec); a.conv.reset();
+        a.upIn .assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+        a.upOut.assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+        a.rsIn.reset(); a.rsOut.reset();
+    }
+    for (auto& b : dualBuf) b.setSize(2, samplesPerBlock + 32, false, true, false);
+    dualMixSm.reset(sampleRate, 0.03);
+    dualMixSm.setCurrentAndTargetValue(apvts.getRawParameterValue(idDualMix)->load());
     monoBuf       .assign((size_t)(samplesPerBlock + 32),     0.f);
     namOutBuf     .assign((size_t)(samplesPerBlock + 32),     0.f);
-    resamplerIn.reset(); resamplerOut.reset();
     tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
     { int maxLag = (int)(sampleRate / 55.0) + 2;             // YIN scratch (RT-safe: prealloc)
       tunerD.assign((size_t) maxLag + 1, 0.0); tunerDP.assign((size_t) maxLag + 1, 1.0); }
@@ -132,14 +146,14 @@ void ArcaneEclipseProcessor::updateEQ()
 
     // Only recalculate if values have actually changed — avoids mid-stream
     // coefficient updates that cause IIR state inconsistency (robotic artifacts)
-    static float lastB=-999,lastM=-999,lastT=-999,lastP=-999;
-    static double lastSR = 0;
-    if (std::abs(bDb-lastB)<0.01f && std::abs(mDb-lastM)<0.01f &&
-        std::abs(tDb-lastT)<0.01f && std::abs(pDb-lastP)<0.01f &&
-        std::abs(sr-lastSR)<1.0)
+    // (per-instance cache: these were function-statics, shared by every plugin
+    //  instance, so a 2nd instance in the same DAW never got its EQ set up)
+    if (std::abs(bDb-eqLastB)<0.01f && std::abs(mDb-eqLastM)<0.01f &&
+        std::abs(tDb-eqLastT)<0.01f && std::abs(pDb-eqLastP)<0.01f &&
+        std::abs(sr-eqLastSR)<1.0)
         return; // nothing changed — keep existing coefficients
 
-    lastB=bDb; lastM=mDb; lastT=tDb; lastP=pDb; lastSR=sr;
+    eqLastB=bDb; eqLastM=mDb; eqLastT=tDb; eqLastP=pDb; eqLastSR=sr;
 
     // Reset filter state before applying new coefficients to avoid transients
     for (int ch = 0; ch < 2; ++ch) {
@@ -256,101 +270,60 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float ampGainDb = juce::jmap(apvts.getRawParameterValue(idAmpGain)->load(), 0.f,10.f,-6.f,18.f);
     buffer.applyGain(juce::Decibels::decibelsToGain(ampGainDb));
 
-    // 6. NAM MODEL — the amp simulation
-    if (namModel != nullptr)
+    // 6. AMP(S) — NAM model(s). Mono amp input: consistent level whether the
+    //    host feeds a mono guitar duplicated on both channels (DAW) or on a
+    //    single input channel (audio interface). Average only when both
+    //    channels carry comparable signal; otherwise sum.
+    const bool dual = isDualActive();
+    if ((int)monoBuf.size()   < numSamples + 8) monoBuf  .assign((size_t)(numSamples + 16), 0.f);
+    if ((int)namOutBuf.size() < numSamples + 8) namOutBuf.assign((size_t)(numSamples + 16), 0.f);
+    auto buildMono = [&]{
+        float magL = buffer.getMagnitude(0, 0, numSamples);
+        float magR = (numCh > 1) ? buffer.getMagnitude(1, 0, numSamples) : 0.f;
+        bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f
+                          && magL < magR * 4.0f && magR < magL * 4.0f);
+        float mScale = dualMono ? 0.5f : 1.0f;
+        auto* L = buffer.getReadPointer(0);
+        for (int n = 0; n < numSamples; ++n)
+            monoBuf[(size_t)n] = (numCh > 1) ? mScale * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
+    };
+
+    if (! dual)
     {
-        const double namSR = 48000.0;
-
-        if (std::abs(currentSampleRate - namSR) < 1.0)
-        {
-            // Host is already 48kHz — no resampling needed, direct processing
-            // Mix to mono in-place
-            if ((int)monoBuf.size() < numSamples + 8)
-                monoBuf.assign((size_t)(numSamples + 16), 0.f);
-            if ((int)namOutBuf.size() < numSamples + 8)
-                namOutBuf.assign((size_t)(numSamples + 16), 0.f);
-
-            // Mono input for the amp - consistent level whether the host feeds a
-            // mono guitar duplicated on both channels (DAW) or on a single input
-            // channel (audio interface, either input). Average only when both
-            // channels carry comparable signal; otherwise sum, so a single-channel
-            // guitar always reaches the amp at full level regardless of which input.
-            float magL = buffer.getMagnitude(0, 0, numSamples);
-            float magR = (numCh > 1) ? buffer.getMagnitude(1, 0, numSamples) : 0.f;
-            bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f
-                              && magL < magR * 4.0f && magR < magL * 4.0f);
-            float mScale = dualMono ? 0.5f : 1.0f;
-            auto* L = buffer.getReadPointer(0);
-            for (int n = 0; n < numSamples; ++n)
-                monoBuf[(size_t)n] = (numCh > 1)
-                    ? mScale * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
-
-            namModel->Process(monoBuf.data(), namOutBuf.data(), (size_t)numSamples);
-
+        // Single amp (unchanged v1.0 behaviour): no model = signal passes through
+        if (amps[0].model != nullptr) {
+            buildMono();
+            runNAM(amps[0], monoBuf.data(), namOutBuf.data(), numSamples);
             for (int ch = 0; ch < numCh; ++ch)
-            {
-                auto* dst = buffer.getWritePointer(ch);
-                for (int n = 0; n < numSamples; ++n)
-                    dst[n] = namOutBuf[(size_t)n];
+                std::copy(namOutBuf.begin(), namOutBuf.begin() + numSamples, buffer.getWritePointer(ch));
+        }
+    }
+    else
+    {
+        // Dual: each amp runs its own model AND its own cab IR on the same input,
+        // then the two are blended. Everything after the model (DC block, EQ,
+        // master) is linear, so applying the shared EQ/master after the blend is
+        // equivalent to applying it inside each path - one faceplate, two amps.
+        buildMono();
+        for (int s = 0; s < kNumAmpSlots; ++s) {
+            auto& a = amps[s]; auto& db = dualBuf[s];
+            if (db.getNumSamples() < numSamples) db.setSize(2, numSamples, false, false, true);
+            const float* src = monoBuf.data();
+            if (a.model != nullptr) { runNAM(a, monoBuf.data(), namOutBuf.data(), numSamples); src = namOutBuf.data(); }
+            for (int ch = 0; ch < 2; ++ch) std::copy(src, src + numSamples, db.getWritePointer(ch));
+            if (a.irLoaded) {
+                auto blk = juce::dsp::AudioBlock<float>(db).getSubBlock(0, (size_t) numSamples);
+                a.conv.process(juce::dsp::ProcessContextReplacing<float>(blk));
             }
         }
-        else
-        {
-            // Resample using JUCE's interpolators with proper block sizing
-            const double ratio = namSR / currentSampleRate;
-            int namSamples = (int)std::ceil((double)numSamples * ratio) + 4;
-
-            if ((int)resampleBufIn.size()  < namSamples + 8)
-                resampleBufIn.assign((size_t)(namSamples + 16), 0.f);
-            if ((int)resampleBufOut.size() < namSamples + 8)
-                resampleBufOut.assign((size_t)(namSamples + 16), 0.f);
-            if ((int)monoBuf.size()   < numSamples + 8)
-                monoBuf.assign((size_t)(numSamples + 16), 0.f);
-            if ((int)namOutBuf.size() < numSamples + 8)
-                namOutBuf.assign((size_t)(numSamples + 16), 0.f);
-
-            // Mix to mono
-            // Mono input for the amp - consistent level whether the host feeds a
-            // mono guitar duplicated on both channels (DAW) or on a single input
-            // channel (audio interface, either input). Average only when both
-            // channels carry comparable signal; otherwise sum, so a single-channel
-            // guitar always reaches the amp at full level regardless of which input.
-            float magL = buffer.getMagnitude(0, 0, numSamples);
-            float magR = (numCh > 1) ? buffer.getMagnitude(1, 0, numSamples) : 0.f;
-            bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f
-                              && magL < magR * 4.0f && magR < magL * 4.0f);
-            float mScale = dualMono ? 0.5f : 1.0f;
-            auto* L = buffer.getReadPointer(0);
-            for (int n = 0; n < numSamples; ++n)
-                monoBuf[(size_t)n] = (numCh > 1)
-                    ? mScale * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
-
-            // Upsample host -> 48kHz
-            int actualUp = resamplerIn.process(
-                ratio, monoBuf.data(), resampleBufIn.data(),
-                namSamples, numSamples, 0);
-            actualUp = juce::jlimit(1, namSamples, actualUp);
-
-            // NAM inference
-            std::fill(resampleBufOut.begin(),
-                      resampleBufOut.begin() + actualUp + 4, 0.f);
-            namModel->Process(resampleBufIn.data(),
-                              resampleBufOut.data(), (size_t)actualUp);
-
-            // Downsample 48kHz -> host
-            int actualDown = resamplerOut.process(
-                1.0 / ratio, resampleBufOut.data(),
-                namOutBuf.data(), numSamples, actualUp, 0);
-            actualDown = juce::jlimit(0, numSamples, actualDown);
-
-            for (int ch = 0; ch < numCh; ++ch)
-            {
-                auto* dst = buffer.getWritePointer(ch);
-                for (int n = 0; n < actualDown; ++n)
-                    dst[n] = namOutBuf[(size_t)n];
-                for (int n = actualDown; n < numSamples; ++n)
-                    dst[n] = 0.f;
-            }
+        // Linear crossfade: keeps the level steady for two amps fed the same guitar
+        dualMixSm.setTargetValue(apvts.getRawParameterValue(idDualMix)->load());
+        auto* a0L = dualBuf[0].getReadPointer(0); auto* a0R = dualBuf[0].getReadPointer(1);
+        auto* a1L = dualBuf[1].getReadPointer(0); auto* a1R = dualBuf[1].getReadPointer(1);
+        for (int n = 0; n < numSamples; ++n) {
+            float m = dualMixSm.getNextValue(), g0 = 1.f - m, g1 = m;
+            buffer.getWritePointer(0)[n] = g0 * a0L[n] + g1 * a1L[n];
+            if (numCh > 1) buffer.getWritePointer(1)[n] = g0 * a0R[n] + g1 * a1R[n];
         }
     }
 
@@ -382,10 +355,11 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float masterDb = juce::jmap(apvts.getRawParameterValue(idAmpMaster)->load(), 0.f,10.f,-20.f,6.f);
     buffer.applyGain(juce::Decibels::decibelsToGain(masterDb));
 
-    // 9. CABINET IR — speaker simulation
-    if (irLoaded) {
+    // 9. CABINET IR — speaker simulation (in dual mode each amp's IR was
+    //    already applied inside its own path above)
+    if (! dual && amps[0].irLoaded) {
         juce::dsp::AudioBlock<float> block(buffer);
-        convolution.process(juce::dsp::ProcessContextReplacing<float>(block));
+        amps[0].conv.process(juce::dsp::ProcessContextReplacing<float>(block));
     }
 
     // 10. MODULATION — post-cab chorus/flanger (keep mix low)
@@ -460,33 +434,112 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     outLevel.store(buffer.getMagnitude(0, numSamples));   // output meter
 }
 
-bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file)
+// ── Amp slots ────────────────────────────────────────────────────────────────
+// Runs one NAM model on a mono block, resampling to/from 48 kHz when needed.
+void ArcaneEclipseProcessor::runNAM(AmpSlot& a, const float* in, float* out, int numSamples)
+{
+    const double namSR = 48000.0;
+    if (std::abs(currentSampleRate - namSR) < 1.0) {           // host already 48 kHz
+        a.model->Process(const_cast<float*>(in), out, (size_t) numSamples);
+        return;
+    }
+    const double ratio = namSR / currentSampleRate;
+    int namSamples = (int) std::ceil((double) numSamples * ratio) + 4;
+    if ((int) a.upIn.size()  < namSamples + 8) a.upIn .assign((size_t)(namSamples + 16), 0.f);
+    if ((int) a.upOut.size() < namSamples + 8) a.upOut.assign((size_t)(namSamples + 16), 0.f);
+
+    int actualUp = a.rsIn.process(ratio, in, a.upIn.data(), namSamples, numSamples, 0);   // host -> 48k
+    actualUp = juce::jlimit(1, namSamples, actualUp);
+    std::fill(a.upOut.begin(), a.upOut.begin() + actualUp + 4, 0.f);
+    a.model->Process(a.upIn.data(), a.upOut.data(), (size_t) actualUp);
+    int actualDown = a.rsOut.process(1.0 / ratio, a.upOut.data(), out, numSamples, actualUp, 0); // 48k -> host
+    actualDown = juce::jlimit(0, numSamples, actualDown);
+    for (int n = actualDown; n < numSamples; ++n) out[n] = 0.f;
+}
+
+bool ArcaneEclipseProcessor::isDualActive() const
+{
+    return apvts.getRawParameterValue(idDualOn)->load() > .5f
+        && (amps[1].model != nullptr || amps[1].irLoaded);
+}
+
+bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file, int slot)
 {
     if (!file.existsAsFile()) return false;
+    auto& a = amps[slotIdx(slot)];
     try {
         auto* raw = namLoader.CreateFromFile(file.getFullPathName().toStdString());
         if (!raw) return false;
         std::unique_ptr<NeuralAudio::NeuralModel> model(raw);
-        { const juce::ScopedLock lock(getCallbackLock()); namModel = std::move(model); loadedNAMName = file.getFileNameWithoutExtension(); }
-        resamplerIn.reset(); resamplerOut.reset();
-    tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
-    tunerStable = 0.f; tunerHistCount = 0;
-        std::fill(resampleBufIn.begin(),  resampleBufIn.end(),  0.f);
-        std::fill(resampleBufOut.begin(), resampleBufOut.end(), 0.f);
-        std::fill(monoBuf.begin(),        monoBuf.end(),        0.f);
-        std::fill(namOutBuf.begin(),      namOutBuf.end(),      0.f);
+        {
+            const juce::ScopedLock lock(getCallbackLock());
+            a.model = std::move(model);
+            a.namName = file.getFileNameWithoutExtension();
+            a.namPath = file.getFullPathName();
+            a.rsIn.reset(); a.rsOut.reset();
+            std::fill(a.upIn.begin(),  a.upIn.end(),  0.f);
+            std::fill(a.upOut.begin(), a.upOut.end(), 0.f);
+        }
         return true;
-    } catch(...) { namModel = nullptr; loadedNAMName = "(failed)"; return false; }
+    } catch(...) {
+        const juce::ScopedLock lock(getCallbackLock());
+        a.model = nullptr; a.namName = "(failed)"; return false;
+    }
 }
 
-bool ArcaneEclipseProcessor::loadIR(const juce::File& file)
+bool ArcaneEclipseProcessor::loadIR(const juce::File& file, int slot)
 {
     if (!file.existsAsFile()) return false;
-    convolution.loadImpulseResponse(file, juce::dsp::Convolution::Stereo::yes,
+    auto& a = amps[slotIdx(slot)];
+    a.conv.loadImpulseResponse(file, juce::dsp::Convolution::Stereo::yes,
         juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
-    loadedIRName = file.getFileNameWithoutExtension();
-    irLoaded = true;
+    a.irName = file.getFileNameWithoutExtension();
+    a.irPath = file.getFullPathName();
+    a.irLoaded = true;
     return true;
+}
+
+void ArcaneEclipseProcessor::unloadNAMModel(int slot)
+{
+    auto& a = amps[slotIdx(slot)];
+    const juce::ScopedLock lock(getCallbackLock());
+    a.model.reset(); a.namName = {}; a.namPath = {};
+}
+
+void ArcaneEclipseProcessor::unloadIR(int slot)
+{
+    auto& a = amps[slotIdx(slot)];
+    a.irLoaded = false; a.irName = {}; a.irPath = {}; a.conv.reset();
+}
+
+juce::File ArcaneEclipseProcessor::aecapCacheDir()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+             .getChildFile("ArcaneEclipse").getChildFile("aecap_cache");
+}
+
+// .nam directly, or .aecap (unpack the model + optional embedded IR). For an
+// .aecap with an IR, the slot's IR path is recorded as the .aecap itself.
+bool ArcaneEclipseProcessor::loadModelAny(const juce::File& f, int slot, juce::String& error)
+{
+    slot = slotIdx(slot);
+    if (! f.getFileExtension().equalsIgnoreCase(".aecap"))
+        return loadNAMModel(f, slot);
+
+    auto c = AecapLoader::loadFile(f);
+    if (! c.ok) { error = c.error; return false; }
+    auto nam = c.materializeModelTo(aecapCacheDir());
+    bool ok = nam.existsAsFile() && loadNAMModel(nam, slot);
+    if (ok) { amps[slot].namName = f.getFileNameWithoutExtension(); amps[slot].namPath = f.getFullPathName(); }
+    if (c.hasIR) {
+        auto irf = aecapCacheDir().getChildFile("aecap_" + juce::String(juce::Time::getHighResolutionTicks()) + ".wav");
+        if (irf.replaceWithData(c.irWav.getData(), c.irWav.getSize()) && loadIR(irf, slot)) {
+            amps[slot].irName = f.getFileNameWithoutExtension();
+            amps[slot].irPath = f.getFullPathName();
+        }
+    }
+    if (! ok) error = "The model inside this .aecap could not be loaded.";
+    return ok;
 }
 
 void ArcaneEclipseProcessor::getStateInformation(juce::MemoryBlock& d)
@@ -500,6 +553,12 @@ void ArcaneEclipseProcessor::getStateInformation(juce::MemoryBlock& d)
                 e->setAttribute("cc", c);
                 e->setAttribute("param", learnParamIDs[pi]);
             }
+        }
+        auto* am = xml->createNewChildElement("AMPS");          // v1.1: recall loaded files
+        for (int i = 0; i < kNumAmpSlots; ++i) {
+            auto* e = am->createNewChildElement("A");
+            e->setAttribute("nam", amps[i].namPath);
+            e->setAttribute("ir",  amps[i].irPath);
         }
         copyXmlToBinary(*xml, d);
     }
@@ -517,7 +576,23 @@ void ArcaneEclipseProcessor::setStateInformation(const void* data, int sizeInByt
             }
             xml->removeChildElement(mm, true);
         }
+        juce::StringArray namP, irP;
+        if (auto* am = xml->getChildByName("AMPS")) {
+            for (auto* e : am->getChildIterator()) {
+                namP.add(e->getStringAttribute("nam")); irP.add(e->getStringAttribute("ir"));
+            }
+            xml->removeChildElement(am, true);
+        }
         apvts.replaceState(juce::ValueTree::fromXml(*xml));
+        // Reload each amp's model + IR (sessions saved before v1.1 have no AMPS block)
+        for (int i = 0; i < juce::jmin(kNumAmpSlots, namP.size()); ++i) {
+            juce::File nf(namP[i]), irf(irP[i]);
+            juce::String err;
+            if (namP[i].isNotEmpty() && nf.existsAsFile()) { if (namP[i] != amps[i].namPath) loadModelAny(nf, i, err); }
+            else unloadNAMModel(i);
+            if (irP[i].isNotEmpty() && irP[i] != namP[i] && irf.existsAsFile()) { if (irP[i] != amps[i].irPath) loadIR(irf, i); }
+            else if (irP[i].isEmpty()) unloadIR(i);
+        }
     }
 }
 

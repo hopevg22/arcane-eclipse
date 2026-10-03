@@ -29,6 +29,8 @@ public:
                               const juce::Colour&,bool,bool) override;
     void drawButtonText(juce::Graphics&,juce::TextButton&,bool,bool) override;
     void drawToggleButton(juce::Graphics&,juce::ToggleButton&,bool,bool) override {}
+    void drawLinearSlider(juce::Graphics&,int,int,int,int,float,float,float,
+                          juce::Slider::SliderStyle,juce::Slider&) override;
     void drawComboBox(juce::Graphics&,int,int,bool,int,int,int,int,juce::ComboBox&) override;
     void positionComboBoxText(juce::ComboBox&,juce::Label&) override;
     void drawPopupMenuItem(juce::Graphics&,const juce::Rectangle<int>&,
@@ -51,6 +53,7 @@ struct AEKnob {
 // ── Scene data ────────────────────────────────────────────────────────────────
 struct SceneData {
     juce::String namPath, irPath, name{"Empty"};
+    juce::String namPath2, irPath2;          // v1.1: amp 2 (Dual Amp/IR)
     juce::ValueTree params;
     bool isEmpty() const { return name == "Empty"; }
 };
@@ -120,9 +123,9 @@ private:
     void refreshSceneButtons();
     void savePresets(); void loadPresets(); juce::File getPresetsFile();
     // v1.1: model loading handles .nam and .aecap; per-slot export/import
-    void loadModelFile(const juce::File& f);          // LOAD MODEL button entry
-    bool loadModelPath(const juce::File& f);          // returns true if an embedded IR was also loaded
-    juce::File aecapCacheDir() const;
+    void loadModelFile(const juce::File& f);          // LOAD MODEL -> the amp being edited
+    int  editSlot() const;                            // amp the MODEL/IR controls act on (0/1)
+    void updateDualUI();                              // show/hide the 1-2 + MIX row
     void exportScene(int slot);                        // write one slot to a .aetone file
     void importScene(int slot);                        // read one slot from a .aetone file
     void resetToDefault();
@@ -141,7 +144,7 @@ private:
     juce::String tunerNote;
     float tunerCents=0.f;
     int activeScene=-1; int currentBank=0;
-    juce::String curNAMPath, curIRPath;
+    int editAmp = 0;                                   // v1.1: 0 = amp 1, 1 = amp 2
     // v1.1: 8 banks x 4 slots = 32 scenes (was 5 banks / 20)
     static constexpr int kSlotsPerBank = 4;
     static constexpr int kNumBanks     = 8;
@@ -187,6 +190,11 @@ private:
     // Load buttons + v1.1 invisible hotspots over the baked art
     juce::TextButton btnLoadModel{"LOAD MODEL"},btnLoadIR{"LOAD IR"};
     juce::TextButton fieldModel, fieldIR, dualBtn, typeBtn[3];
+    // v1.1 Dual Amp/IR: [1] --MIX-- [2] row under the DUAL AMP/IR button
+    juce::TextButton ampSelBtn[2];
+    juce::Slider dualMix{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attDual;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attDualMix;
     std::vector<juce::Component*> hiddenByTuner;
 
     // Scene bar (4 slots + 2 bank buttons)
