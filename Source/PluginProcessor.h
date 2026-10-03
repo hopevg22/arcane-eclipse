@@ -112,6 +112,7 @@ public:
     static constexpr auto idReverbMix   = "reverbMix";
     static constexpr auto idReverbHighCut = "reverbHighCut";
     static constexpr auto idReverbType  = "reverbType";
+    static constexpr auto idReverbShimmer = "reverbShimmer";   // v1.1 octave-up layer
 
 private:
     std::unique_ptr<NeuralAudio::NeuralModel> namModel;
@@ -148,10 +149,15 @@ private:
     std::atomic<int> actionLearn   { -1 };
     std::atomic<int> actionPending { -1 };
     int indexOfParam(const juce::String& id) const;
-    // Tuner
+    // Tuner — YIN pitch detection (v1.1) + octave-snap smoothing
     std::vector<float> tunerBuf;
     int tunerFill = 0;
-    static float detectPitch(const float* buf, int n, double sr);
+    float detectPitch(const float* buf, int n, double sr);   // YIN (uses scratch below)
+    float smoothTunerPitch(float raw);                       // octave-snap + median
+    std::vector<double> tunerD, tunerDP;                     // preallocated YIN scratch
+    float tunerStable = 0.f;
+    float tunerHist[5] = {0,0,0,0,0};
+    int   tunerHistCount = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseProcessor)
 };

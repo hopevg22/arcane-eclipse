@@ -81,6 +81,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbSize,  "Reverb Size", Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbMix,   "Reverb Mix",  Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idReverbType,  "Reverb Type", 0, 3, 0));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idReverbShimmer, "Shimmer", false));
 
     return { p.begin(), p.end() };
 }
@@ -102,6 +103,9 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     namOutBuf     .assign((size_t)(samplesPerBlock + 32),     0.f);
     resamplerIn.reset(); resamplerOut.reset();
     tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
+    { int maxLag = (int)(sampleRate / 55.0) + 2;             // YIN scratch (RT-safe: prealloc)
+      tunerD.assign((size_t) maxLag + 1, 0.0); tunerDP.assign((size_t) maxLag + 1, 1.0); }
+    tunerStable = 0.f; tunerHistCount = 0;
     compressor.prepare(sampleRate, samplesPerBlock);
     overdrive.prepare(sampleRate, samplesPerBlock);
     modulation.prepare(sampleRate, samplesPerBlock);
@@ -202,7 +206,8 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             float smp = numCh > 1 ? 0.5f * (in[n] + buffer.getReadPointer(1)[n]) : in[n];
             tunerBuf[(size_t) tunerFill++] = smp;
             if (tunerFill >= (int) tunerBuf.size()) {
-                tunerFreq.store(detectPitch(tunerBuf.data(), (int) tunerBuf.size(), currentSampleRate));
+                float raw = detectPitch(tunerBuf.data(), (int) tunerBuf.size(), currentSampleRate);
+                tunerFreq.store(smoothTunerPitch(raw));
                 tunerFill = 0;
             }
         }
@@ -400,6 +405,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         prevDelayOn = dlOn;
     }
     if (apvts.getRawParameterValue(idDelayOn)->load() > .5f) {
+        delay.setType((int) apvts.getRawParameterValue(idDelayType)->load());   // v1.1 digital/analog/tape/echo
         delay.setParameters(
             apvts.getRawParameterValue(idDelayTime)->load(),
             apvts.getRawParameterValue(idDelayFeedback)->load(),
@@ -415,6 +421,8 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         prevReverbOn = rvOn;
     }
     if (apvts.getRawParameterValue(idReverbOn)->load() > .5f) {
+        reverb.setType((int) apvts.getRawParameterValue(idReverbType)->load());        // v1.1 room/hall/plate/spring
+        reverb.setShimmer(apvts.getRawParameterValue(idReverbShimmer)->load() > .5f);  // v1.1 octave-up layer
         reverb.setParameters(
             apvts.getRawParameterValue(idReverbDecay)->load(),
             0.f,
@@ -462,6 +470,7 @@ bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file)
         { const juce::ScopedLock lock(getCallbackLock()); namModel = std::move(model); loadedNAMName = file.getFileNameWithoutExtension(); }
         resamplerIn.reset(); resamplerOut.reset();
     tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
+    tunerStable = 0.f; tunerHistCount = 0;
         std::fill(resampleBufIn.begin(),  resampleBufIn.end(),  0.f);
         std::fill(resampleBufOut.begin(), resampleBufOut.end(), 0.f);
         std::fill(monoBuf.begin(),        monoBuf.end(),        0.f);
@@ -550,38 +559,80 @@ int  ArcaneEclipseProcessor::actionLearningNow() const { return actionLearn.load
 int  ArcaneEclipseProcessor::takePendingAction() { return actionPending.exchange(-1); }
 void ArcaneEclipseProcessor::cancelLearn() { learnTarget.store(-1); actionLearn.store(-1); }
 
-// ── Tuner pitch detection (autocorrelation) ──────────────────────────────────
+// ── Tuner pitch detection (YIN) ───────────────────────────────────────────────
+// YIN difference + cumulative-mean-normalised difference with an absolute
+// threshold. Far more octave-robust than plain autocorrelation (handles a weak
+// or missing fundamental, which is what caused octave flicker). Uses the
+// preallocated tunerD/tunerDP scratch so it stays real-time safe.
 float ArcaneEclipseProcessor::detectPitch(const float* buf, int n, double sr)
 {
-    // Level gate — ignore silence/very quiet input
     double energy = 0.0;
     for (int i = 0; i < n; ++i) energy += (double) buf[i] * buf[i];
-    double rms = std::sqrt(energy / (double) n);
-    if (rms < 0.004 || energy <= 0.0) return 0.0f;
+    if (energy <= 0.0) return 0.0f;
+    if (std::sqrt(energy / (double) n) < 0.004) return 0.0f;   // level gate
 
-    const int minLag = juce::jmax(2, (int) (sr / 1200.0)); // up to ~1200 Hz
-    const int maxLag = juce::jmin(n / 2, (int) (sr / 60.0)); // down to ~60 Hz
+    const int minLag = juce::jmax(2, (int) (sr / 1200.0));     // up to ~1200 Hz
+    int maxLag = juce::jmin(n / 2, (int) (sr / 55.0));         // down to ~55 Hz
+    if ((int) tunerD.size() <= maxLag) maxLag = (int) tunerD.size() - 1;
     if (maxLag <= minLag) return 0.0f;
 
-    double bestCorr = 0.0; int bestLag = -1;
-    for (int lag = minLag; lag <= maxLag; ++lag) {
-        double corr = 0.0;
-        for (int i = 0; i < n - lag; ++i) corr += (double) buf[i] * buf[i + lag];
-        if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
+    // difference function d(tau)
+    for (int tau = 1; tau <= maxLag; ++tau) {
+        double sum = 0.0;
+        for (int i = 0; i < n - tau; ++i) { double df = (double) buf[i] - buf[i + tau]; sum += df * df; }
+        tunerD[(size_t) tau] = sum;
     }
-    if (bestLag < 1) return 0.0f;
-    if (bestCorr / energy < 0.30) return 0.0f; // not periodic enough
+    // cumulative mean normalised difference d'(tau)
+    double run = 0.0; tunerDP[0] = 1.0;
+    for (int tau = 1; tau <= maxLag; ++tau) {
+        run += tunerD[(size_t) tau];
+        tunerDP[(size_t) tau] = (run > 0.0) ? tunerD[(size_t) tau] * (double) tau / run : 1.0;
+    }
+    // absolute threshold: first dip below threshold, descend to its local min
+    const double thresh = 0.12;
+    int best = -1;
+    for (int tau = minLag; tau < maxLag; ++tau) {
+        if (tunerDP[(size_t) tau] < thresh) {
+            while (tau + 1 <= maxLag && tunerDP[(size_t) (tau + 1)] < tunerDP[(size_t) tau]) ++tau;
+            best = tau; break;
+        }
+    }
+    if (best < 0) {                                            // fallback: global min
+        double mn = 1e9;
+        for (int tau = minLag; tau <= maxLag; ++tau)
+            if (tunerDP[(size_t) tau] < mn) { mn = tunerDP[(size_t) tau]; best = tau; }
+        if (best < 0 || mn > 0.6) return 0.0f;                 // not periodic enough
+    }
+    // parabolic interpolation around the chosen lag
+    double tauEst = best;
+    if (best > minLag && best < maxLag) {
+        double a = tunerDP[(size_t) (best - 1)], b = tunerDP[(size_t) best], c = tunerDP[(size_t) (best + 1)];
+        double den = a - 2.0 * b + c;
+        if (std::abs(den) > 1e-12) tauEst = best + 0.5 * (a - c) / den;
+    }
+    return (tauEst > 0.0) ? (float) (sr / tauEst) : 0.0f;
+}
 
-    // Parabolic interpolation for a finer period estimate
-    double lag = bestLag;
-    if (bestLag > minLag && bestLag < maxLag) {
-        double c0 = 0.0, c2 = 0.0;
-        for (int i = 0; i < n - (bestLag - 1); ++i) c0 += (double) buf[i] * buf[i + bestLag - 1];
-        for (int i = 0; i < n - (bestLag + 1); ++i) c2 += (double) buf[i] * buf[i + bestLag + 1];
-        double denom = c0 - 2.0 * bestCorr + c2;
-        if (std::abs(denom) > 1e-12) lag = bestLag + 0.5 * (c0 - c2) / denom;
+// Octave-snap + 5-frame median smoothing: kills residual octave jumps and
+// jitter so the readout holds steady.
+float ArcaneEclipseProcessor::smoothTunerPitch(float raw)
+{
+    if (raw <= 0.0f) { tunerHistCount = 0; return 0.0f; }     // reset on silence
+    if (tunerStable > 0.0f) {
+        while (raw > 1.5f  * tunerStable) raw *= 0.5f;        // snap toward the running estimate
+        while (raw < 0.67f * tunerStable) raw *= 2.0f;
     }
-    return (float) (sr / lag);
+    // rolling 5-sample median
+    for (int i = juce::jmin(tunerHistCount, 4); i > 0; --i) tunerHist[i] = tunerHist[i - 1];
+    tunerHist[0] = raw;
+    if (tunerHistCount < 5) ++tunerHistCount;
+    float tmp[5]; for (int i = 0; i < tunerHistCount; ++i) tmp[i] = tunerHist[i];
+    for (int i = 0; i < tunerHistCount; ++i)
+        for (int j = i + 1; j < tunerHistCount; ++j)
+            if (tmp[j] < tmp[i]) std::swap(tmp[i], tmp[j]);
+    float med = tmp[tunerHistCount / 2];
+    tunerStable = (tunerStable > 0.0f) ? 0.8f * tunerStable + 0.2f * med : med;
+    return med;
 }
 
 juce::AudioProcessorEditor* ArcaneEclipseProcessor::createEditor() { return new ArcaneEclipseEditor(*this); }
