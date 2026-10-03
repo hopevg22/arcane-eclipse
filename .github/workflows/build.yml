@@ -17,6 +17,8 @@ jobs:
             artifact_name: ArcaneEclipse-macOS-VST3
 
     runs-on: ${{ matrix.os }}
+    env:
+      AECAP_SECRET_KEY: ${{ secrets.AECAP_SECRET_KEY }}
 
     steps:
       - name: Check out project

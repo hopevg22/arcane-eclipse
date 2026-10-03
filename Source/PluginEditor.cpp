@@ -16,6 +16,28 @@ static const juce::Colour kRed   {0xffcc4444};
 const juce::String ArcaneEclipseEditor::kChainLabels[9]=
     {"GATE","COMP","DRIVE","AMP","CAB","EQ","MOD","DELAY","REVERB"};
 
+// ── v1.1 re-skin geometry ─────────────────────────────────────────────────────
+// background.png is the approved render (1514 x 1039). Every coordinate below is
+// written in RENDER pixels so it can be read straight off the artwork, then mapped
+// to the 1200 x 823 window by these helpers.
+static constexpr float kRW = 1514.f, kRH = 1039.f;
+static inline float SX(float x){ return x * 1200.f / kRW; }
+static inline float SY(float y){ return y *  823.f / kRH; }
+static inline juce::Rectangle<float> RF(float x0,float y0,float x1,float y1)
+    { return { SX(x0), SY(y0), SX(x1)-SX(x0), SY(y1)-SY(y0) }; }
+static inline juce::Rectangle<int>   RR(float x0,float y0,float x1,float y1)
+    { return RF(x0,y0,x1,y1).getSmallestIntegerContainer(); }
+
+// Flat fills sampled from the render, used to paint over baked text cleanly
+static const juce::Colour kPresetFill{0xff110d17};
+static const juce::Colour kFooterFill{0xff14101a};
+
+// Mark a button as an invisible hotspot over baked art (hover tint only)
+static void makeHotspot(juce::Button& b, float radius = 6.f){
+    b.getProperties().set("hs", radius);
+    b.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+}
+
 // Dark-outlined text so labels read on the busy background and dark art
 static void haloText(juce::Graphics& g,const juce::String& s,juce::Font f,
                      juce::Colour col,juce::Rectangle<int> r,juce::Justification j)
@@ -53,10 +75,11 @@ AELAF::AELAF(){
 void AELAF::drawRotarySlider(juce::Graphics& g,int x,int y,int w,int h,
                               float pos,float startA,float endA,juce::Slider&)
 {
-    // Unified knob image, rotated to the value; transparent corners let the art show
-    static juce::Image src = juce::ImageCache::getFromMemory(
-        BinaryData::knob_unified_png, BinaryData::knob_unified_pngSize);
-    static juce::Image knob = src.rescaled(160,160,juce::Graphics::highResamplingQuality);
+    // v1.1 knob: one 256px image (rim fills the square, pointer + glow baked in at
+    // 12 o'clock), rotated to the value. Same art at all three sizes.
+    static juce::Image knob = juce::ImageCache::getFromMemory(
+        BinaryData::knob_v11_png, BinaryData::knob_v11_pngSize);
+    if (! knob.isValid()) return;
 
     auto b=juce::Rectangle<float>((float)x,(float)y,(float)w,(float)h);
     auto c=b.getCentre();
@@ -64,16 +87,25 @@ void AELAF::drawRotarySlider(juce::Graphics& g,int x,int y,int w,int h,
     float ang=startA+pos*(endA-startA);
     float s = sz/(float)knob.getWidth();
     auto tr = juce::AffineTransform::scale(s)
-                .translated(c.x - knob.getWidth()*s*0.5f, c.y - knob.getHeight()*s*0.5f)
+                .translated(c.x - sz*0.5f, c.y - sz*0.5f)
                 .rotated(ang, c.x, c.y);
+    g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
     g.drawImageTransformed(knob, tr, false);
-
-    // Purple glow at the pointer tip
-    float pr=sz*0.5f*0.85f;
-    float gx=c.x+std::sin(ang)*pr, gy=c.y-std::cos(ang)*pr;
-    g.setColour(kPurple.withAlpha(0.30f)); g.fillEllipse(gx-sz*0.16f,gy-sz*0.16f,sz*0.32f,sz*0.32f);
-    g.setColour(kPurple);                  g.fillEllipse(gx-sz*0.075f,gy-sz*0.075f,sz*0.15f,sz*0.15f);
-    g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(gx-sz*0.035f,gy-sz*0.035f,sz*0.07f,sz*0.07f);
+}
+void AELAF::drawLinearSlider(juce::Graphics& g,int x,int y,int w,int h,
+                             float pos,float,float,juce::Slider::SliderStyle,juce::Slider&)
+{
+    // Dual Amp/IR MIX: amp 1 (left, lilac) <-> amp 2 (right, purple)
+    float cy=y+h*0.68f, th=3.f;
+    auto track=juce::Rectangle<float>((float)x+4.f,cy-th*0.5f,(float)w-8.f,th);
+    g.setColour(juce::Colour(0xcc0c0912)); g.fillRoundedRectangle(track.expanded(2.f),3.f);
+    juce::ColourGradient cg(juce::Colour(0xffc9a3ff),track.getX(),cy,kPurple,track.getRight(),cy,false);
+    g.setGradientFill(cg); g.fillRoundedRectangle(track,1.5f);
+    float r=juce::jmin(6.f,h*0.26f);
+    g.setColour(kPurple.withAlpha(0.28f)); g.fillEllipse(pos-r*1.35f,cy-r*1.35f,r*2.7f,r*2.7f);
+    g.setColour(juce::Colour(0xff1a1622)); g.fillEllipse(pos-r,cy-r,2*r,2*r);
+    g.setColour(kPurple);                  g.drawEllipse(pos-r,cy-r,2*r,2*r,1.6f);
+    g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(pos-r*0.35f,cy-r*0.35f,r*0.7f,r*0.7f);
 }
 void AELAF::drawLabel(juce::Graphics& g,juce::Label& l){
     auto txt=l.getText(); auto f=l.getFont(); auto j=l.getJustificationType();
@@ -86,14 +118,26 @@ void AELAF::drawLabel(juce::Graphics& g,juce::Label& l){
     g.drawText(txt,r,j,false);
 }
 void AELAF::drawButtonBackground(juce::Graphics& g,juce::Button& btn,
-                                  const juce::Colour&,bool,bool isDown){
+                                  const juce::Colour&,bool isOver,bool isDown){
     auto b=btn.getLocalBounds().toFloat().reduced(.5f);
+    if (btn.getProperties().contains("hs")) {          // hotspot over baked art
+        if (isOver || isDown) {
+            float r = (float) btn.getProperties()["hs"];
+            g.setColour(juce::Colours::white.withAlpha(isDown ? 0.10f : 0.05f));
+            g.fillRoundedRectangle(b, r);
+        }
+        return;
+    }
     bool on=btn.getToggleState();
     g.setColour(isDown?kPurple.withAlpha(.35f):(on?kPurple.withAlpha(.22f):
                 btn.findColour(juce::TextButton::buttonColourId)));
     g.fillRoundedRectangle(b,6.f);
     g.setColour(on||isDown?kPurple:kCardBd);
     g.drawRoundedRectangle(b,6.f,on?1.8f:1.f);
+}
+void AELAF::drawButtonText(juce::Graphics& g,juce::TextButton& btn,bool over,bool down){
+    if (btn.getProperties().contains("hs")) return;     // label is part of the render
+    juce::LookAndFeel_V4::drawButtonText(g,btn,over,down);
 }
 void AELAF::drawComboBox(juce::Graphics& g,int w,int h,bool,
                           int,int,int,int,juce::ComboBox&){
@@ -121,7 +165,7 @@ void AELAF::drawPopupMenuItem(juce::Graphics& g,const juce::Rectangle<int>& area
 
 // ── CreditsPanel ─────────────────────────────────────────────────────────────
 static const char* kCreditsText =
-    "ARCANE ECLIPSE v1.0.0\n"
+    "ARCANE ECLIPSE v1.1.0\n"
     "by AMARI LABS\n"
     "Philippines\n\n"
     "Built with open-source components:\n\n"
@@ -215,11 +259,12 @@ void AEKnob::setup(juce::Component* p,juce::AudioProcessorValueTreeState& ap,
     };
     slider.onValueChange();
 }
-void AEKnob::place(int cx,int cy,int sz,bool showVal){
+void AEKnob::place(int cx,int cy,int sz,bool){
     slider.setBounds(cx-sz/2, cy-sz/2, sz, sz);
-    nameLabel.setBounds(cx-40, cy+sz/2+6,  80, 13);
-    valLabel .setBounds(cx-32, cy+sz/2+18, 64, 12);
-    valLabel.setVisible(showVal);
+    // v1.1: knob names + scales are baked into the render; the value is shown
+    // on the knob face while hovering/dragging (see paintOverChildren).
+    nameLabel.setVisible(false);
+    valLabel .setVisible(false);
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -291,33 +336,79 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     attReverb=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbOn,stompReverb);
     attCab   =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idCabBypass,tbCab);
 
-    // Effect-type dropdowns removed — each effect uses its default algorithm.
+    // v1.1: pedal footswitches drive the same on/off params as the chain nodes
+    for(auto* t:{&fsOD,&fsMod,&fsDelay,&fsReverb}){
+        addAndMakeVisible(*t); t->setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    }
+    for(auto* t:{&tbGate,&tbComp,&stompOD,&stompMod,&stompDelay,&stompReverb,&tbTuner,&presetPrev,&presetNext,&stereoBtn})
+        t->setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    attFsOD    =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idODOn,    fsOD);
+    attFsMod   =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idModOn,   fsMod);
+    // DELAY footswitch is handled by hand (v1.1.1): normally on/off; in tap mode a
+    // press = TAP and a long hold = on/off (see mouseDown / mouseUp)
+    fsDelay.setClickingTogglesState(false);
+    fsDelay.addMouseListener(this,false);
+    attFsReverb=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbOn,fsReverb);
+
+    // v1.1: effect TYPE selection — the small pill under MIX on MOD / DELAY / REVERB
+    for(int i=0;i<3;++i){
+        makeHotspot(typeBtn[i],6.f);
+        typeBtn[i].setTooltip("Click to choose the effect type");
+        typeBtn[i].onClick=[this,i]{ showTypeMenu(i); };
+        addAndMakeVisible(typeBtn[i]);
+    }
+    // OVERDRIVE: pedal-capture pill (load a NAM pedal capture / back to built-in)
+    makeHotspot(odBtn,6.f);
+    odBtn.setTooltip("Load a NAM pedal capture into the Overdrive (replaces the built-in drive)");
+    odBtn.onClick=[this]{ showODMenu(); };
+    addAndMakeVisible(odBtn);
+
+    // MODEL / IR fields act as dropdowns (load / clear)
+    makeHotspot(fieldModel,5.f); fieldModel.onClick=[this]{ showFieldMenu(false); }; addAndMakeVisible(fieldModel);
+    makeHotspot(fieldIR,5.f);    fieldIR.onClick   =[this]{ showFieldMenu(true);  }; addAndMakeVisible(fieldIR);
+    // DUAL AMP/IR: run two amp+IR sets in parallel and blend them (v1.1)
+    makeHotspot(dualBtn,6.f);
+    dualBtn.setClickingTogglesState(true);
+    dualBtn.setTooltip("Dual Amp/IR: run two amp + IR sets side by side and blend them with MIX");
+    attDual=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts,ArcaneEclipseProcessor::idDualOn,dualBtn);
+    dualBtn.onClick=[this]{ updateDualUI(); repaint(); };
+    addAndMakeVisible(dualBtn);
+    for(int i=0;i<2;++i){
+        makeHotspot(ampSelBtn[i],5.f);
+        ampSelBtn[i].setTooltip(i==0?"Edit amp 1 (model + IR)":"Edit amp 2 (model + IR)");
+        ampSelBtn[i].onClick=[this,i]{ editAmp=i; repaint(); };
+        addChildComponent(ampSelBtn[i]);
+    }
+    dualMix.setLookAndFeel(&laf);
+    dualMix.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    dualMix.setTooltip("Blend between amp 1 and amp 2");
+    dualMix.setDoubleClickReturnValue(true,0.5);       // double-click = 50/50
+    dualMix.setSliderSnapsToMousePosition(false);      // drag is relative: clicks never jump the blend
+    attDualMix=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        p.apvts,ArcaneEclipseProcessor::idDualMix,dualMix);
+    addChildComponent(dualMix);
+    dualMix.addMouseListener(this,false);          // right-click -> MIDI learn (expression pedal)
 
     addAndMakeVisible(btnLoadModel);
     btnLoadModel.onClick=[this]{
-        chooserModel=std::make_unique<juce::FileChooser>("Load NAM Model",
-            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.nam");
+        chooserModel=std::make_unique<juce::FileChooser>("Load Model (.nam / .aecap)",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.nam;*.aecap");
         chooserModel->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadNAMModel(r[0]);curNAMPath=r[0].getFullPathName();repaint();}});
+            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()) loadModelFile(r[0]);});
     };
     addAndMakeVisible(btnLoadIR);
     btnLoadIR.onClick=[this]{
         chooserIR=std::make_unique<juce::FileChooser>("Load IR",
             juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.wav");
         chooserIR->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadIR(r[0]);curIRPath=r[0].getFullPathName();repaint();}});
+            [this](const juce::FileChooser& fc){auto r=fc.getResults();if(!r.isEmpty()){proc.loadIR(r[0],editSlot());repaint();}});
     };
-    btnClearModel.setColour(juce::TextButton::buttonColourId,juce::Colours::transparentBlack);
-    btnClearModel.setColour(juce::TextButton::textColourOffId,kMuted);
-    btnClearModel.onClick=[this]{proc.unloadNAMModel();curNAMPath.clear();repaint();};
-    addAndMakeVisible(btnClearModel);
-    btnClearIR.setColour(juce::TextButton::buttonColourId,juce::Colours::transparentBlack);
-    btnClearIR.setColour(juce::TextButton::textColourOffId,kMuted);
-    btnClearIR.onClick=[this]{proc.unloadIR();curIRPath.clear();repaint();};
-    addAndMakeVisible(btnClearIR);
+    makeHotspot(btnLoadModel,6.f); makeHotspot(btnLoadIR,6.f);
 
     // Scene slots 1-4
     for(int i=0;i<4;++i){
+        makeHotspot(sceneBtn[i],6.f);
         sceneBtn[i].setButtonText(juce::String(i+1));
         sceneBtn[i].setClickingTogglesState(false);
         addAndMakeVisible(sceneBtn[i]);
@@ -328,6 +419,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
             refreshSceneButtons(); repaint();
         };
     }
+    makeHotspot(bankPrev,6.f); makeHotspot(bankNext,6.f);
     bankPrev.setButtonText("< BANK"); bankNext.setButtonText("BANK >");
     addAndMakeVisible(bankPrev); addAndMakeVisible(bankNext);
     bankPrev.onClick=[this]{ stepBank(-1); };
@@ -338,13 +430,12 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     addAndMakeVisible(presetPrev); addAndMakeVisible(presetNext);
     presetPrev.onClick=[this]{ stepPreset(-1); };
     presetNext.onClick=[this]{ stepPreset(+1); };
-    headerSave.setColour(juce::TextButton::buttonColourId,kPurple);
-    headerSave.setColour(juce::TextButton::textColourOffId,juce::Colours::white);
+    makeHotspot(headerSave,5.f);
     addAndMakeVisible(headerSave);
     headerSave.onClick=[this]{
         juce::PopupMenu m;
         m.addSectionHeader("Save current settings to:");
-        for (int bank=0; bank<5; ++bank) {
+        for (int bank=0; bank<kNumBanks; ++bank) {
             juce::PopupMenu bm;
             for (int slot=0; slot<4; ++slot) {
                 int idx = bank*4+slot;
@@ -360,7 +451,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
         m.addItem(1002, "Delete current preset",    haveActive);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&headerSave),
             [this](int r){
-                if (r>=1 && r<=20) { saveScene(r-1); currentBank=(r-1)/4; refreshSceneButtons(); repaint(); }
+                if (r>=1 && r<=kNumScenes) { saveScene(r-1); currentBank=(r-1)/kSlotsPerBank; refreshSceneButtons(); repaint(); }
                 else if (r==1001) { renameScene(activeScene); }
                 else if (r==1002) { deleteScene(activeScene); }
             });
@@ -372,11 +463,10 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     // Invisible clickable region over the ? icon
     helpBtn=std::make_unique<juce::TextButton>();
     helpBtn->setButtonText("");
-    helpBtn->setColour(juce::TextButton::buttonColourId,juce::Colours::transparentBlack);
-    helpBtn->setColour(juce::TextButton::buttonOnColourId,juce::Colours::transparentBlack);
+    makeHotspot(*helpBtn,5.f);
     helpBtn->onClick=[this]{ showCredits(); };
     addAndMakeVisible(*helpBtn);
-    helpBtn->setBounds(W-78,10,30,30);
+    helpBtn->setBounds(RR(1418,13,1454,50));
 
     // Tuner toggle sits on the header tuning-fork icon
     tbTuner.setClickingTogglesState(true);
@@ -385,6 +475,7 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
 
     loadPresets();
     refreshSceneButtons();
+    updateDualUI();
     startTimerHz(15);
 
     // License check — show activation dialog if not licensed
@@ -426,9 +517,19 @@ void ArcaneEclipseEditor::timerCallback()
             tunerNote = juce::String(nm[nn]) + juce::String(oct);
             tunerHz = hz;
         } else { tunerHz = 0.f; tunerNote = {}; tunerCents = 0.f; }
+        // animation: eased needle, strobe drift proportional to the detune, signal fade
+        double now = juce::Time::getMillisecondCounterHiRes();
+        float dt = tunerLastTick > 0.0 ? (float) juce::jlimit(0.0, 0.1, (now - tunerLastTick) / 1000.0) : 1.f/30.f;
+        tunerLastTick = now;
+        bool sig = tunerHz > 0.f;
+        tunerSignal    += ((sig ? 1.f : 0.f) - tunerSignal) * 0.25f;
+        tunerDispCents += ((sig ? tunerCents : 0.f) - tunerDispCents) * 0.35f;
+        if (sig && std::fabs(tunerCents) >= 1.f) tunerStrobe += tunerCents * 3.0f * dt;   // px/s per cent
+        tunerStrobe = std::fmod(tunerStrobe, 1000.f);
     }
     vuIn  = juce::jmax(vuIn  * 0.80f, juce::jlimit(0.f,1.f, proc.inLevel.load()));
     vuOut = juce::jmax(vuOut * 0.80f, juce::jlimit(0.f,1.f, proc.outLevel.load()));
+    updateDualUI();
     repaint();
 }
 
@@ -436,20 +537,28 @@ void ArcaneEclipseEditor::setTunerVisible(bool v)
 {
     tunerVisible=v;
     proc.tunerActive.store(v);
+    startTimerHz(v ? 30 : 15);                       // smooth needle + strobe while tuning
+    tunerLastTick = 0.0;
     if(!v){ proc.tunerFreq.store(0.f); tunerHz=0.f; tunerNote={}; tunerCents=0.f; }
     tbTuner.setToggleState(v,juce::dontSendNotification);
-    for(auto* c:getChildren())
-        if(c!=&tbTuner && c!=&creditsPanel)
-            c->setVisible(!v);
-    if(v) creditsPanel.setVisible(false);
+    // Hide only what is currently visible, and restore exactly that set — the
+    // re-skin keeps several components hidden on purpose (baked labels etc.).
+    if(v){
+        hiddenByTuner.clear();
+        for(auto* c:getChildren())
+            if(c!=&tbTuner && c->isVisible()){ hiddenByTuner.push_back(c); c->setVisible(false); }
+    } else {
+        for(auto* c:hiddenByTuner) if(c!=&creditsPanel) c->setVisible(true);
+        hiddenByTuner.clear();
+    }
     repaint();
 }
 void ArcaneEclipseEditor::stepPreset(int d){
-    int n=activeScene<0?0:activeScene; n=(n+d+20)%20; loadScene(n);
+    int n=activeScene<0?0:activeScene; n=(n+d+kNumScenes)%kNumScenes; loadScene(n);
     currentBank=n/4; refreshSceneButtons(); repaint();
 }
 void ArcaneEclipseEditor::stepBank(int d){
-    currentBank=(currentBank+d+5)%5; refreshSceneButtons(); repaint();
+    currentBank=(currentBank+d+kNumBanks)%kNumBanks; refreshSceneButtons(); repaint();
 }
 void ArcaneEclipseEditor::cancelMidiLearn(){
     proc.cancelLearn(); learningID={}; learningAction=-1; repaint();
@@ -461,8 +570,28 @@ bool ArcaneEclipseEditor::keyPressed(const juce::KeyPress& k){
     }
     return false;
 }
+bool ArcaneEclipseEditor::delayTapMode() const {
+    return proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDelayTapMode)->load() > .5f;
+}
+void ArcaneEclipseEditor::mouseUp(const juce::MouseEvent& e)
+{
+    if(e.eventComponent!=&fsDelay || e.mods.isPopupMenu() || tunerVisible) return;
+    auto* on=proc.apvts.getParameter(ArcaneEclipseProcessor::idDelayOn);
+    bool held = juce::Time::getMillisecondCounterHiRes()-fsDelayDownMs >= 600.0;
+    if(! delayTapMode() || held){
+        if(held && fsDelayTapped) proc.undoLastTap();       // the hold wasn't a tap
+        on->beginChangeGesture(); on->setValueNotifyingHost(on->getValue()<.5f?1.f:0.f); on->endChangeGesture();
+    }
+    fsDelayTapped=false; repaint();
+}
 void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
 {
+    if(e.eventComponent==&fsDelay && !e.mods.isPopupMenu() && !tunerVisible){
+        fsDelayDownMs = juce::Time::getMillisecondCounterHiRes();
+        fsDelayTapped = false;
+        if(delayTapMode()){ proc.tapTempo(); fsDelayTapped=true; }   // tap on press = tight timing
+        return;
+    }
     if(tunerVisible){
         auto pos=e.getEventRelativeTo(this).getPosition();
         if(juce::Rectangle<int>(W-46,12,30,30).contains(pos)) setTunerVisible(false);
@@ -497,6 +626,9 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
         m.addItem(3,"Rename...",!empty);
         m.addItem(4,"Delete",!empty);
         m.addSeparator();
+        m.addItem(7,"Export tone...",!empty);
+        m.addItem(8,"Import tone...");
+        m.addSeparator();
         m.addItem(5, acc<0 ? "MIDI Learn (footswitch)" : "MIDI Learn (re-assign)");
         if(acc>=0) m.addItem(6, "Clear MIDI (CC "+juce::String(acc)+")");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&sceneBtn[i]),
@@ -505,6 +637,8 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
                 else if(r==2){ loadScene(idx); refreshSceneButtons(); repaint(); }
                 else if(r==3){ renameScene(idx); }
                 else if(r==4){ deleteScene(idx); }
+                else if(r==7){ exportScene(idx); }
+                else if(r==8){ importScene(idx); }
                 else if(r==5){ proc.actionLearnStart(i); learningAction=i; repaint(); }
                 else if(r==6){ proc.actionLearnClear(i); repaint(); }
             });
@@ -524,15 +658,15 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
             });
         return;
     }
-    AEKnob* hit=nullptr;
-    for(auto* k:allKnobs) if(&k->slider==e.eventComponent){ hit=k; break; }
-    if(hit==nullptr) return;
-    juce::String pid=hit->paramID;
+    juce::Slider* hitSlider=nullptr; juce::String pid;
+    for(auto* k:allKnobs) if(&k->slider==e.eventComponent){ hitSlider=&k->slider; pid=k->paramID; break; }
+    if(hitSlider==nullptr && e.eventComponent==&dualMix){ hitSlider=&dualMix; pid=ArcaneEclipseProcessor::idDualMix; }
+    if(hitSlider==nullptr) return;
     int cc=proc.ccForParam(pid);
     juce::PopupMenu m;
     m.addItem(1, cc<0 ? "MIDI Learn" : "MIDI Learn (re-assign)");
     if(cc>=0) m.addItem(2, "Clear MIDI (CC "+juce::String(cc)+")");
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&hit->slider),
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(hitSlider),
         [this,pid](int r){
             if(r==1){ proc.midiLearnStart(pid); learningID=pid; }
             else if(r==2){ proc.midiLearnClear(pid); }
@@ -562,13 +696,16 @@ juce::File ArcaneEclipseEditor::getPresetsFile()
 void ArcaneEclipseEditor::savePresets()
 {
     juce::XmlElement root("AEPresets");
-    for (int i=0;i<20;++i){
+    for (int i=0;i<kNumScenes;++i){
         if (scenes[i].isEmpty()) continue;
         auto* e = root.createNewChildElement("Scene");
         e->setAttribute("idx", i);
         e->setAttribute("name", scenes[i].name);
         e->setAttribute("nam",  scenes[i].namPath);
         e->setAttribute("ir",   scenes[i].irPath);
+        e->setAttribute("nam2", scenes[i].namPath2);
+        e->setAttribute("ir2",  scenes[i].irPath2);
+        e->setAttribute("od",   scenes[i].odPath);
         if (scenes[i].params.isValid())
             if (auto px = scenes[i].params.createXml())
                 e->addChildElement(px.release());
@@ -586,10 +723,13 @@ void ArcaneEclipseEditor::loadPresets()
     for (auto* e : xml->getChildIterator()){
         if (e->getTagName() != "Scene") continue;
         int i = e->getIntAttribute("idx", -1);
-        if (i < 0 || i >= 20) continue;
+        if (i < 0 || i >= kNumScenes) continue;
         scenes[i].name    = e->getStringAttribute("name", "Empty");
         scenes[i].namPath = e->getStringAttribute("nam");
         scenes[i].irPath  = e->getStringAttribute("ir");
+        scenes[i].namPath2= e->getStringAttribute("nam2");
+        scenes[i].irPath2 = e->getStringAttribute("ir2");
+        scenes[i].odPath  = e->getStringAttribute("od");
         if (auto* px = e->getFirstChildElement())
             scenes[i].params = juce::ValueTree::fromXml(*px);
     }
@@ -621,9 +761,12 @@ void ArcaneEclipseEditor::renameScene(int slot){
 
 // ── Scene save/load ───────────────────────────────────────────────────────────
 void ArcaneEclipseEditor::saveScene(int slot){
-    scenes[slot].namPath = curNAMPath;
-    scenes[slot].irPath  = curIRPath;
-    scenes[slot].params  = proc.apvts.copyState();
+    scenes[slot].namPath  = proc.getNAMPath(0);
+    scenes[slot].irPath   = proc.getIRPath(0);
+    scenes[slot].namPath2 = proc.getNAMPath(1);
+    scenes[slot].irPath2  = proc.getIRPath(1);
+    scenes[slot].odPath   = proc.getODModelPath();
+    scenes[slot].params   = proc.apvts.copyState();
     if(scenes[slot].name=="Empty") scenes[slot].name = slotCode(slot);
     activeScene=slot;
     savePresets();
@@ -631,114 +774,193 @@ void ArcaneEclipseEditor::saveScene(int slot){
 void ArcaneEclipseEditor::resetToDefault(){
     for (auto* prm : proc.getParameters())
         prm->setValueNotifyingHost(prm->getDefaultValue());
-    if(curNAMPath.isNotEmpty()){ proc.unloadNAMModel(); curNAMPath={}; }
-    if(curIRPath.isNotEmpty()) { proc.unloadIR();       curIRPath={}; }
+    for(int a=0;a<ArcaneEclipseProcessor::kNumAmpSlots;++a){
+        if(proc.isNAMLoaded(a)) proc.unloadNAMModel(a);
+        if(proc.isIRLoaded(a))  proc.unloadIR(a);
+    }
+    if(proc.isODModelLoaded()) proc.unloadODModel();
+    editAmp=0; updateDualUI();
     repaint();
 }
 void ArcaneEclipseEditor::loadScene(int slot){
     if(scenes[slot].isEmpty()){ resetToDefault(); activeScene=slot; return; }
-    if(scenes[slot].params.isValid())
+    if(scenes[slot].params.isValid()){
         proc.apvts.replaceState(scenes[slot].params);
-    // Recall the scene's NAM model (reload only when it changes)
-    if(scenes[slot].namPath != curNAMPath){
-        if(scenes[slot].namPath.isNotEmpty() && juce::File(scenes[slot].namPath).existsAsFile())
-            proc.loadNAMModel(juce::File(scenes[slot].namPath));
-        else
-            proc.unloadNAMModel();
-        curNAMPath = scenes[slot].namPath;
+        // Scenes saved before v1.1 carry no Dual settings: start them in single-amp mode
+        if(! scenes[slot].params.getChildWithProperty("id",ArcaneEclipseProcessor::idDualOn).isValid())
+            if(auto* d=proc.apvts.getParameter(ArcaneEclipseProcessor::idDualOn)) d->setValueNotifyingHost(0.f);
     }
-    // Recall the scene's IR (reload only when it changes)
-    if(scenes[slot].irPath != curIRPath){
-        if(scenes[slot].irPath.isNotEmpty() && juce::File(scenes[slot].irPath).existsAsFile())
-            proc.loadIR(juce::File(scenes[slot].irPath));
-        else
-            proc.unloadIR();
-        curIRPath = scenes[slot].irPath;
+    // Recall each amp's model (.nam or .aecap - an .aecap may carry its own IR,
+    // in which case its IR path equals its model path) and its separate IR.
+    const juce::String namP[2]={scenes[slot].namPath, scenes[slot].namPath2};
+    const juce::String irP [2]={scenes[slot].irPath,  scenes[slot].irPath2};
+    for(int a=0;a<ArcaneEclipseProcessor::kNumAmpSlots;++a){
+        if(namP[a]!=proc.getNAMPath(a)){
+            juce::String err;
+            if(namP[a].isNotEmpty() && juce::File(namP[a]).existsAsFile()) proc.loadModelAny(juce::File(namP[a]),a,err);
+            else proc.unloadNAMModel(a);
+        }
+        if(irP[a]!=proc.getIRPath(a)){
+            if(irP[a].isNotEmpty() && irP[a]!=namP[a] && juce::File(irP[a]).existsAsFile()) proc.loadIR(juce::File(irP[a]),a);
+            else if(irP[a].isEmpty()) proc.unloadIR(a);
+        }
+    }
+    // overdrive pedal capture (empty = built-in drive)
+    if(scenes[slot].odPath!=proc.getODModelPath()){
+        juce::String err;
+        if(scenes[slot].odPath.isNotEmpty() && juce::File(scenes[slot].odPath).existsAsFile())
+            proc.loadODModel(juce::File(scenes[slot].odPath),err);
+        else proc.unloadODModel();
     }
     activeScene=slot;
+    updateDualUI();
+}
+
+// ── Model loading: .nam or .aecap into the amp currently being edited ─────────
+int ArcaneEclipseEditor::editSlot() const {
+    bool dualOn = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    return dualOn ? editAmp : 0;
+}
+void ArcaneEclipseEditor::loadModelFile(const juce::File& f){
+    juce::String err;
+    if(! proc.loadModelAny(f, editSlot(), err) && err.isNotEmpty())
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Arcane Eclipse", "Could not open " + f.getFileName() + ":\n" + err);
+    repaint();
+}
+void ArcaneEclipseEditor::updateDualUI(){
+    if(tunerVisible) return;                      // tuner owns visibility while open
+    bool on = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    if(!on) editAmp=0;
+    for(auto& b:ampSelBtn) if(b.isVisible()!=on) b.setVisible(on);
+    if(dualMix.isVisible()!=on) dualMix.setVisible(on);
+}
+
+// ── Per-slot export / import (.aetone = a single-slot preset file) ──────────────
+void ArcaneEclipseEditor::exportScene(int slot){
+    if(slot<0 || slot>=kNumScenes || scenes[slot].isEmpty()) return;
+    juce::ValueTree t("AETONE");
+    t.setProperty("name", scenes[slot].name, nullptr);
+    t.setProperty("nam",  scenes[slot].namPath, nullptr);
+    t.setProperty("ir",   scenes[slot].irPath, nullptr);
+    t.setProperty("nam2", scenes[slot].namPath2, nullptr);
+    t.setProperty("ir2",  scenes[slot].irPath2, nullptr);
+    t.setProperty("od",   scenes[slot].odPath, nullptr);
+    if(scenes[slot].params.isValid()) t.appendChild(scenes[slot].params.createCopy(), nullptr);
+    auto xml = t.toXmlString();
+    chooserExport=std::make_unique<juce::FileChooser>("Export Tone",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile(scenes[slot].name + ".aetone"), "*.aetone");
+    chooserExport->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles,
+        [xml](const juce::FileChooser& fc){ auto r=fc.getResult();
+            if(r != juce::File()) r.replaceWithText(xml); });
+}
+void ArcaneEclipseEditor::importScene(int slot){
+    if(slot<0 || slot>=kNumScenes) return;
+    chooserImport=std::make_unique<juce::FileChooser>("Import Tone",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.aetone");
+    chooserImport->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+        [this,slot](const juce::FileChooser& fc){ auto r=fc.getResult();
+            if(r == juce::File() || !r.existsAsFile()) return;
+            auto xml = juce::XmlDocument::parse(r);
+            if(xml==nullptr) return;
+            auto t = juce::ValueTree::fromXml(*xml);
+            if(!t.isValid() || !t.hasType("AETONE")) return;
+            scenes[slot].name    = t.getProperty("name", slotCode(slot)).toString();
+            scenes[slot].namPath = t.getProperty("nam","").toString();
+            scenes[slot].irPath  = t.getProperty("ir","").toString();
+            scenes[slot].namPath2= t.getProperty("nam2","").toString();
+            scenes[slot].irPath2 = t.getProperty("ir2","").toString();
+            scenes[slot].odPath  = t.getProperty("od","").toString();
+            if(t.getNumChildren()>0) scenes[slot].params = t.getChild(0).createCopy();
+            savePresets(); loadScene(slot); refreshSceneButtons(); repaint();
+        });
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────────
+// ── v1.1 re-skin: layout map (render px; see SX/SY/RR at top of file) ─────────
+// Chain-node boxes, measured off the render (left edges, 77 x 64 px each)
+static const float kNodeX[9] = { 358, 449, 541, 629, 720, 809, 899, 987, 1078 };
+static constexpr float kNodeY0 = 109.f, kNodeY1 = 173.f, kNodeW = 77.f;
+// Knob centres + diameters (fitted against the concept render)
+static const float kStripXY[4][2] = { {85,144}, {183,143}, {1315,143}, {1425,144} };
+static constexpr float kStripD = 58.f;
+static const float kAmpX[6] = { 192, 417, 646, 870, 1096, 1319 };
+static constexpr float kAmpY = 484.f, kAmpD = 72.f;
+static const float kPedXY[12][2] = {          // row 1 (2 per pedal) then row 2 (MIX/LEVEL)
+    {84,666},{196,666}, {345,666},{455,666}, {606,666},{720,666}, {869,666},{981,666},
+    {140,750},{400,750},{663,750},{923,750} };
+static constexpr float kPedD = 50.f;
+// Pedals: card spans, footswitch / LED centres
+static const float kCardX[4][2] = { {22,258}, {284,520}, {545,781}, {806,1042} };
+static const float kFootX[4]    = { 139, 400, 661, 922 };
+static constexpr float kFootY = 855.f, kFootR = 26.f, kLedY = 817.f;
+// Scene bar slots
+static const float kSlotX[4][2] = { {152,447}, {466,748}, {765,1048}, {1067,1360} };
+static constexpr float kSlotY0 = 918.f, kSlotY1 = 964.f;
+
 juce::Rectangle<int> ArcaneEclipseEditor::chainNodeBounds(int i) const
 {
-    int nodeW=64,nodeH=54;
-    int totalW=9*nodeW+8*6;
-    int startX=(W-totalW)/2;
-    int x=startX+i*(nodeW+6);
-    int y=kTopH+(kStripH-nodeH)/2;
-    return{x,y,nodeW,nodeH};
+    return RR(kNodeX[i], kNodeY0, kNodeX[i]+kNodeW, kNodeY1);
 }
 
 void ArcaneEclipseEditor::resized()
 {
-    { int fY = kTopH+kStripH+kAmpH+kFXH+kSceneH; stereoBtn.setBounds(getWidth()-278, fY, 84, kFootH); }
-    int stripY=kTopH, ampY=kTopH+kStripH, fxY=ampY+kAmpH, sceneY=fxY+kFXH;
+    auto placeR=[](AEKnob& k,float x,float y,float d){
+        k.place(juce::roundToInt(SX(x)), juce::roundToInt(SY(y)), juce::roundToInt(SX(d)), false);
+    };
 
     // Strip knobs
-    int sSz=52, sCy=stripY+kStripH/2;
-    kInput .place(66,   sCy,sSz);
-    kGate  .place(138,  sCy,sSz);
-    kComp  .place(W-138,sCy,sSz);
-    kOutput.place(W-66, sCy,sSz);
+    AEKnob* strip[4]={&kInput,&kGate,&kComp,&kOutput};
+    for(int i=0;i<4;++i) placeR(*strip[i],kStripXY[i][0],kStripXY[i][1],kStripD);
 
-    // Chain node toggles (invisible, over painted nodes)
-    for(int i=0;i<9;++i){
-        auto nb=chainNodeBounds(i);
-        if(i==0) tbGate.setBounds(nb); else if(i==1) tbComp.setBounds(nb);
-        else if(i==2) stompOD.setBounds(nb); else if(i==6) stompMod.setBounds(nb);
-        else if(i==7) stompDelay.setBounds(nb); else if(i==8) stompReverb.setBounds(nb);
-    }
+    // Amp faceplate
+    AEKnob* amp[6]={&kGain,&kBass,&kMid,&kTreble,&kPresence,&kMaster};
+    for(int i=0;i<6;++i) placeR(*amp[i],kAmpX[i],kAmpY,kAmpD);
 
-    // Amp knobs on the brushed faceplate (below the purple divider ~0.571)
-    int aSz=72;
-    int faceTop=ampY+(int)(kAmpH*0.571f);
-    int aCy=faceTop+(int)((fxY-faceTop)*0.42f);
-    for(int i=0;i<6;++i){
-        AEKnob* ks[]={&kGain,&kBass,&kMid,&kTreble,&kPresence,&kMaster};
-        ks[i]->place(150+i*180,aCy,aSz,true);
-    }
+    // Pedals: OD drive/tone, MOD rate/depth, DELAY time/fb, REVERB decay/size, then the 4 lower knobs
+    AEKnob* ped[12]={&kODDrive,&kODTone,&kModRate,&kModDepth,&kDTime,&kDFeedback,&kRDecay,&kRSize,
+                     &kODLevel,&kModMix,&kDMix,&kRMix};
+    for(int i=0;i<12;++i) placeR(*ped[i],kPedXY[i][0],kPedXY[i][1],kPedD);
+    // Reverb HIGH CUT has no position in the v1.1 render — hidden (param keeps its value)
+    kRHiCut.slider.setBounds(-100,-100,1,1); kRHiCut.slider.setVisible(false);
 
-    // FX cards
-    int cardW=196, step=208, fxSz=48;
-    int topCy=fxY+(int)(kFXH*0.28f), botCy=fxY+(int)(kFXH*0.61f);
-    int comboY=fxY+(int)(kFXH*0.83f);
-    int odX=10, modX=10+step, dlX=10+2*step, rvX=10+3*step;
-    kODDrive.place(odX+(int)(cardW*0.28f),topCy,fxSz,true);
-    kODTone .place(odX+(int)(cardW*0.72f),topCy,fxSz,true);
-    kODLevel.place(odX+cardW/2,           botCy,fxSz,true);
-    kModRate .place(modX+(int)(cardW*0.28f),topCy,fxSz,true);
-    kModDepth.place(modX+(int)(cardW*0.72f),topCy,fxSz,true);
-    kModMix  .place(modX+cardW/2,           botCy,fxSz,true);
-    kDTime    .place(dlX+(int)(cardW*0.28f),topCy,fxSz,true);
-    kDFeedback.place(dlX+(int)(cardW*0.72f),topCy,fxSz,true);
-    kDMix     .place(dlX+cardW/2,           botCy,fxSz,true);
-    kRDecay.place(rvX+(int)(cardW*0.28f),topCy,fxSz,true);
-    kRSize .place(rvX+(int)(cardW*0.72f),topCy,fxSz,true);
-    kRMix  .place(rvX+(int)(cardW*0.28f),botCy,fxSz,true);
-    kRHiCut.place(rvX+(int)(cardW*0.72f),botCy,fxSz,true);
+    // Chain node toggles (invisible, over the baked nodes)
+    tbGate.setBounds(chainNodeBounds(0));      tbComp.setBounds(chainNodeBounds(1));
+    stompOD.setBounds(chainNodeBounds(2));     stompMod.setBounds(chainNodeBounds(6));
+    stompDelay.setBounds(chainNodeBounds(7));  stompReverb.setBounds(chainNodeBounds(8));
 
-    // Cabinet loader buttons (mapped to the art's recessed slots)
-    int cabX=844; auto px=[&](float v){return cabX+(int)(v*kCabW/477.f);};
-    auto py=[&](float v){return fxY+(int)(v*kFXH/355.f);};
-    btnLoadModel.setBounds(px(31),py(282),px(231)-px(31),py(331)-py(282));
-    btnLoadIR   .setBounds(px(245),py(282),px(445)-px(245),py(332)-py(282));
-    btnClearModel.setBounds(px(445)-20,(py(74)+py(121))/2-8,16,16);
-    btnClearIR   .setBounds(px(445)-20,(py(134)+py(175))/2-8,16,16);
+    // Pedal footswitches + type hotspots (pedal titles)
+    juce::ToggleButton* fs[4]={&fsOD,&fsMod,&fsDelay,&fsReverb};
+    for(int i=0;i<4;++i) fs[i]->setBounds(RR(kFootX[i]-kFootR,kFootY-kFootR,kFootX[i]+kFootR,kFootY+kFootR));
+    for(int i=0;i<3;++i) typeBtn[i].setBounds(RR(kFootX[i+1]-60,795,kFootX[i+1]+60,810));   // type pill
+    odBtn.setBounds(RR(kFootX[0]-60,795,kFootX[0]+60,810));                                   // OD capture pill
 
-    // Scene bar: 4 slots + 2 bank buttons
-    int bankW=96,gap=10;
-    int slotW=(W-2*bankW-2*16-5*gap)/4;
-    int sy=sceneY+8, sh=kSceneH-16;
-    bankPrev.setBounds(16,sy,bankW,sh);
-    for(int i=0;i<4;++i)
-        sceneBtn[i].setBounds(16+bankW+gap+i*(slotW+gap),sy,slotW,sh);
-    bankNext.setBounds(W-16-bankW,sy,bankW,sh);
+    // Cab / loader panel
+    fieldModel  .setBounds(RR(1291,649,1471,687));
+    fieldIR     .setBounds(RR(1291,707,1471,745));
+    dualBtn     .setBounds(RR(1291,763,1470,800));
+    // Dual row (shown only while Dual is on): [1] ---MIX--- [2]
+    ampSelBtn[0].setBounds(RR(1291,806,1323,832));
+    ampSelBtn[1].setBounds(RR(1438,806,1470,832));
+    dualMix     .setBounds(RR(1330,806,1431,832));
+    btnLoadModel.setBounds(RR(1087,840,1271,877));
+    btnLoadIR   .setBounds(RR(1291,840,1469,877));
 
-    // Header preset nav + save + tuner icon
-    presetPrev.setBounds(436,10,28,34);
-    presetNext.setBounds(696,10,28,34);
-    headerSave.setBounds(742,10,64,30);
-    tbTuner.setBounds(W-150,10,30,30);
+    // Scene bar
+    bankPrev.setBounds(RR(24,kSlotY0,134,kSlotY1));
+    for(int i=0;i<4;++i) sceneBtn[i].setBounds(RR(kSlotX[i][0],kSlotY0,kSlotX[i][1],kSlotY1));
+    bankNext.setBounds(RR(1379,kSlotY0,1489,kSlotY1));
+
+    // Header: preset arrows, SAVE, tuner (fork icon), help (?)
+    presetPrev.setBounds(RR(545,12,592,54));
+    presetNext.setBounds(RR(870,12,917,54));
+    headerSave.setBounds(RR(938,13,1017,50));
+    tbTuner   .setBounds(RR(1325,13,1361,50));
+    if(helpBtn) helpBtn->setBounds(RR(1418,13,1454,50));   // resized() first runs from setSize(), before helpBtn exists
+
+    // Footer STEREO/MONO toggle
+    stereoBtn.setBounds(RR(1270,996,1342,1020));
 
     tbCab.setBounds(-200,-200,1,1);
     creditsPanel.setBounds((W-440)/2,(H-540)/2,440,540);
@@ -751,16 +973,40 @@ void ArcaneEclipseEditor::paint(juce::Graphics& g)
     if(tunerVisible){ paintTuner(g); return; }
     static juce::Image bg = juce::ImageCache::getFromMemory(BinaryData::background_png,BinaryData::background_pngSize);
     if(bg.isValid()){
-        float sc=juce::jmax((float)W/bg.getWidth(),(float)H/bg.getHeight());
-        int dw=(int)(bg.getWidth()*sc), dh=(int)(bg.getHeight()*sc);
-        g.drawImage(bg,(W-dw)/2,(H-dh)/2,dw,dh,0,0,bg.getWidth(),bg.getHeight());
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        g.drawImage(bg,0,0,W,H,0,0,bg.getWidth(),bg.getHeight());
     }
-    paintTopBar(g); paintStrip(g); paintChain(g); paintAmpHead(g);
-    paintFXSection(g); paintCabSection(g); paintSceneBar(g); paintFooter(g);
+    paintHeaderLive(g);
+    paintVU(g,RF(18,100,34,198),vuIn);
+    paintVU(g,RF(1480,100,1496,198),vuOut);
+    paintChainLive(g);
+    paintPedalsLive(g);
+    paintCabLive(g);
+    paintScenesLive(g);
+    paintFooterLive(g);
 }
+
 void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
 {
-    if(tunerVisible || (learningID.isEmpty() && learningAction<0)) return;
+    if(tunerVisible) return;
+
+    // Value readout on the knob face while hovering / dragging
+    for(auto* k:allKnobs){
+        auto& s=k->slider;
+        if(!s.isVisible() || !(s.isMouseOverOrDragging())) continue;
+        auto b=s.getBounds();
+        float fs=juce::jlimit(8.f,11.f,b.getWidth()*0.22f);
+        haloText(g,s.getTextFromValue(s.getValue()),juce::Font(fs).boldened(),juce::Colours::white,
+                 b.withSizeKeepingCentre(b.getWidth()+20,(int)fs+4),juce::Justification::centred);
+    }
+
+    if(dualMix.isVisible() && dualMix.isMouseOverOrDragging()){
+        auto lb=dualMix.getBounds().withHeight(juce::roundToInt(SY(11.f))).translated(0,-juce::roundToInt(SY(3.f)));
+        haloText(g,dualMix.getTextFromValue(dualMix.getValue()),juce::Font(SY(11.f)).boldened(),juce::Colours::white,
+                 lb.expanded(10,0),juce::Justification::centred);
+    }
+
+    if(learningID.isEmpty() && learningAction<0) return;
     float pulse=(float)std::sin(juce::Time::getMillisecondCounter()*0.006)*0.5f+0.5f;
     for(auto* k:allKnobs) if(k->paramID==learningID && k->slider.isVisible()){
         auto b=k->slider.getBounds().toFloat().expanded(3.f);
@@ -768,6 +1014,12 @@ void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
         g.drawRoundedRectangle(b,b.getWidth()*0.5f,2.5f);
         haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
                  {k->slider.getX()-12,k->slider.getY()-13,k->slider.getWidth()+24,12},juce::Justification::centred);
+    }
+    if(learningID==ArcaneEclipseProcessor::idDualMix && dualMix.isVisible()){
+        auto b=dualMix.getBounds().toFloat().expanded(3.f);
+        g.setColour(kPurple.withAlpha(0.35f+0.55f*pulse)); g.drawRoundedRectangle(b,6.f,2.5f);
+        haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
+                 {dualMix.getX(),dualMix.getY()-13,dualMix.getWidth(),12},juce::Justification::centred);
     }
     for(auto& nl:nodeLearns) if(nl.pid==learningID){
         auto nb=chainNodeBounds(nl.nodeIdx);
@@ -793,256 +1045,454 @@ void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
     }
 }
 
-void ArcaneEclipseEditor::paintTopBar(juce::Graphics& g)
+// Purple LED glow (on-state) centred on a render-px point
+static void ledGlow(juce::Graphics& g,float rx,float ry,float rr)
 {
-    g.setColour(juce::Colour(0xff0c0c13)); g.fillRect(0,0,W,kTopH);
-    g.setColour(kCardBd); g.drawHorizontalLine(kTopH,0.f,(float)W);
-    // logo
-    g.setColour(kPurple);
-    float lx=26.f,ly=27.f,R=13.f;
-    for(int i=0;i<8;++i){float a=i*juce::MathConstants<float>::pi/4.f;float rr=(i%2)?R*0.5f:R;
-        g.drawLine(lx,ly,lx+std::cos(a)*rr,ly+std::sin(a)*rr,(i%2)?1.f:1.6f);}
-    g.fillEllipse(lx-3,ly-3,6,6);
-    g.setColour(kPurple.withAlpha(0.4f)); g.drawEllipse(lx-R,ly-R,2*R,2*R,1.f);
-    // brand
-    haloText(g,"ARCANE",juce::Font(19.f).boldened(),kText,{46,10,110,30},juce::Justification::centredLeft);
-    haloText(g,"ECLIPSE",juce::Font(12.f).boldened(),kPurple,{150,12,80,26},juce::Justification::centredLeft);
-    haloText(g,"v1.0.0",juce::Font(8.5f),kMuted,{228,14,60,24},juce::Justification::centredLeft);
-    // preset box
-    int pbx=430,pbw=300;
-    g.setColour(juce::Colour(0xff0c0c14)); g.fillRoundedRectangle((float)pbx,8.f,(float)pbw,38.f,6.f);
-    g.setColour(kPurple); g.drawRoundedRectangle(pbx+0.5f,8.5f,pbw-1.f,37.f,6.f,1.4f);
-    g.setColour(kPurple);
-    {juce::Path a;a.startNewSubPath(pbx+20.f,20.f);a.lineTo(pbx+13.f,25.f);a.lineTo(pbx+20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
-    {juce::Path a;a.startNewSubPath(pbx+pbw-20.f,20.f);a.lineTo(pbx+pbw-13.f,25.f);a.lineTo(pbx+pbw-20.f,30.f);g.strokePath(a,juce::PathStrokeType(2.f));}
-    juce::String pn = (activeScene>=0 && !scenes[activeScene].isEmpty())?scenes[activeScene].name:"No Preset";
-    haloText(g,pn,juce::Font(12.f).boldened(),kText,{pbx+30,12,pbw-60,20},juce::Justification::centred);
-    for(int i=0;i<5;++i){ g.setColour(i==currentBank?kPurple:juce::Colour(0x66bcbce2));
-        g.fillEllipse(pbx+pbw/2-24+i*12-2.f,37.f,4.f,4.f);}
-    // icons
-    int ico[4]={W-150,W-114,W-78,W-42};
-    for(int k=0;k<4;++k){g.setColour(juce::Colour(0xff212130));g.fillRoundedRectangle((float)ico[k],10.f,30.f,30.f,5.f);
-        g.setColour(kCardBd);g.drawRoundedRectangle(ico[k]+0.5f,10.5f,29.f,29.f,5.f,1.f);}
-    {float cx=ico[0]+15.f; g.setColour(kMuted);
-     g.drawLine(cx-4,17,cx-4,27,1.6f); g.drawLine(cx+4,17,cx+4,27,1.6f);
-     juce::Path u;u.startNewSubPath(cx-4,27);u.quadraticTo(cx-4,31,cx,31);u.quadraticTo(cx+4,31,cx+4,27);
-     g.strokePath(u,juce::PathStrokeType(1.6f)); g.drawLine(cx,31,cx,34,1.6f);}
-    g.setColour(kMuted);
-    g.drawRect(juce::Rectangle<float>((float)(ico[1]+7),20.f,7.f,10.f),1.4f);
-    g.drawRect(juce::Rectangle<float>((float)(ico[1]+16),20.f,7.f,10.f),1.4f);
-    haloText(g,"?",juce::Font(14.f).boldened(),kMuted,{ico[2],10,30,30},juce::Justification::centred);
-    g.setColour(kPurple); g.drawEllipse(ico[3]+10.f,19.f,10.f,10.f,1.4f); g.drawLine(ico[3]+15.f,17.f,ico[3]+15.f,24.f,1.4f);
+    float cx=SX(rx), cy=SY(ry), r=SX(rr);
+    g.setColour(kPurple.withAlpha(0.28f)); g.fillEllipse(cx-r*2.2f,cy-r*2.2f,r*4.4f,r*4.4f);
+    g.setColour(kPurple);                  g.fillEllipse(cx-r,cy-r,r*2.f,r*2.f);
+    g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(cx-r*0.45f,cy-r*0.45f,r*0.9f,r*0.9f);
 }
 
-void ArcaneEclipseEditor::paintStrip(juce::Graphics& g)
+void ArcaneEclipseEditor::paintHeaderLive(juce::Graphics& g)
 {
-    int stripY=kTopH;
-    g.setColour(kCardBd); g.drawHorizontalLine(stripY+kStripH,0.f,(float)W);
-    int sCy=stripY+kStripH/2;
-    paintVU(g,{14.f,(float)(sCy-45),14.f,90.f},vuIn);
-    paintVU(g,{(float)(W-28),(float)(sCy-45),14.f,90.f},vuOut);
+    // Preset name inside the baked preset box
+    juce::String pn = (activeScene>=0 && !scenes[activeScene].isEmpty())
+                      ? slotCode(activeScene)+"   "+scenes[activeScene].name : juce::String("No Preset");
+    haloText(g,pn,juce::Font(SY(17.f)).boldened(),kText,RR(600,14,862,40),juce::Justification::centred);
+
+    // Bank dots: the render has 7; v1.1 has 8 banks, so repaint the row
+    g.setColour(kPresetFill); g.fillRect(RF(690,40,810,55));
+    for(int i=0;i<kNumBanks;++i){
+        float x=SX(749.5f+(i-(kNumBanks-1)*0.5f)*15.5f), y=SY(47.f), r=SX(2.6f);
+        g.setColour(i==currentBank?kPurple:juce::Colour(0x66bcbce2));
+        g.fillEllipse(x-r,y-r,2*r,2*r);
+    }
 }
+
 void ArcaneEclipseEditor::paintVU(juce::Graphics& g,juce::Rectangle<float> b,float lvl)
 {
-    g.setColour(juce::Colour(0xff08080e)); g.fillRoundedRectangle(b,2.f);
-    int n=16,lit=(int)std::round(n*juce::jlimit(0.f,1.f,lvl));
-    float sh=b.getHeight()/n;
+    // Lights the render's 14 baked meter segments from the bottom up
+    constexpr int n=14;
+    int lit=(int)std::round(n*juce::jlimit(0.f,1.f,lvl));
+    float pitch=b.getHeight()/n, sh=pitch*0.68f;
     for(int i=0;i<lit;++i){
-        float sy=b.getBottom()-(i+1)*sh+1;
-        g.setColour(i>=14?kRed:(i>=11?kPurDim:kPurple));
-        g.fillRect(b.getX()+1,sy,b.getWidth()-2,sh-1.5f);
+        float sy=b.getBottom()-(i+1)*pitch+(pitch-sh)*0.5f;
+        auto c = i>=12 ? kRed : (i>=9 ? juce::Colour(0xffc9a3ff) : kPurple);
+        g.setColour(c.withAlpha(0.25f)); g.fillRect(b.getX()-1.f,sy-1.f,b.getWidth()+2.f,sh+2.f);
+        g.setColour(c);                  g.fillRect(b.getX()+0.5f,sy,b.getWidth()-1.f,sh);
     }
-    g.setColour(kCardBd.withAlpha(0.6f)); g.drawRoundedRectangle(b,2.f,1.f);
 }
 
-void ArcaneEclipseEditor::paintChain(juce::Graphics& g)
+void ArcaneEclipseEditor::paintChainLive(juce::Graphics& g)
 {
     bool act[9]={ tbGate.getToggleState(), tbComp.getToggleState(), stompOD.getToggleState(),
-                  proc.isNAMLoaded(), proc.isIRLoaded(), true,
+                  proc.isNAMLoaded(0) || (proc.isDualActive() && proc.isNAMLoaded(1)),
+                  proc.isIRLoaded(0)  || (proc.isDualActive() && proc.isIRLoaded(1)), true,
                   stompMod.getToggleState(), stompDelay.getToggleState(), stompReverb.getToggleState() };
+    // Baked indicator bulbs on GATE, COMP, DELAY, REVERB
+    static const float ledX[9]={396,487,-1,-1,-1,-1,-1,1025,1117};
+
     for(int i=0;i<9;++i){
-        auto nb=chainNodeBounds(i);
-        paintChainNode(g,i,nb,act[i]);
-        haloText(g,kChainLabels[i],juce::Font(7.f).boldened(),juce::Colours::white,
-                 {nb.getX()-3,nb.getBottom()+2,nb.getWidth()+6,10},juce::Justification::centred);
-        if(i<8){
-            auto nn=chainNodeBounds(i+1); bool glow=act[i]&&act[i+1];
-            float ay=(float)nb.getCentreY(), ax=nb.getRight()+1.f, ax2=nn.getX()-1.f;
-            g.setColour((glow?kPurple:kMuted).withAlpha(glow?0.85f:0.3f));
-            g.drawLine(ax,ay,ax2,ay,1.4f);
-            g.drawLine(ax2-4,ay-3,ax2,ay,1.4f); g.drawLine(ax2-4,ay+3,ax2,ay,1.4f);
+        auto r=chainNodeBounds(i).toFloat().reduced(1.f);
+        if(act[i]){
+            g.setColour(kPurple.withAlpha(0.10f)); g.fillRoundedRectangle(r,6.f);
+            g.setColour(kPurple.withAlpha(0.30f)); g.drawRoundedRectangle(r.expanded(1.5f),7.f,3.f);
+            g.setColour(kPurple);                  g.drawRoundedRectangle(r,6.f,1.4f);
+            if(ledX[i]>0) ledGlow(g,ledX[i],117.f,3.2f);
+        } else {
+            g.setColour(juce::Colours::black.withAlpha(0.38f)); g.fillRoundedRectangle(r,6.f);  // dim = off
+        }
+        if(i<8 && act[i] && act[i+1]){
+            float y=SY(141.f), x0=SX(kNodeX[i]+kNodeW), x1=SX(kNodeX[i+1]);
+            g.setColour(kPurple); g.drawLine(x0,y,x1,y,1.6f);
         }
     }
 }
-void ArcaneEclipseEditor::paintChainNode(juce::Graphics& g,int idx,juce::Rectangle<int> nb,bool on)
+
+juce::String ArcaneEclipseEditor::typeName(int fx) const
 {
-    auto r=nb.toFloat();
-    g.setColour(on?kPurple.withAlpha(0.16f):juce::Colour(0xb814141e));
-    g.fillRoundedRectangle(r,7.f);
-    g.setColour(on?kPurple:kCardBd); g.drawRoundedRectangle(r,7.f,on?1.6f:1.f);
-    float cx=r.getCentreX(), cy=r.getCentreY()-2.f, R=11.f;
-    g.setColour(on?kPurple:kMuted);
-    switch(idx){
-      case 0: g.drawLine(cx-R,cy+R*0.7f,cx+R,cy-R*0.7f,2.f); break;
-      case 1:{juce::Path p;p.startNewSubPath(cx-R,cy+7);p.quadraticTo(cx,cy+7,cx,cy);p.quadraticTo(cx,cy-7,cx+R,cy-7);g.strokePath(p,juce::PathStrokeType(1.8f));}break;
-      case 2: g.fillEllipse(cx-R+2-3,cy-4-3,6,6); g.fillEllipse(cx-R+2-3,cy+4-3,6,6);
-              g.drawLine(cx-R+7,cy-4,cx+R,cy-4,1.6f); g.drawLine(cx-R+7,cy+4,cx+R,cy+4,1.6f); break;
-      case 3: g.drawRoundedRectangle(cx-R,cy-8,2*R,16,2.f,1.6f); g.fillEllipse(cx-4,cy-4,8,8); break;
-      case 4: g.drawRoundedRectangle(cx-R,cy-8,2*R,16,3.f,1.6f); g.drawEllipse(cx-5,cy-5,10,10,1.5f); g.fillEllipse(cx-2,cy-2,4,4); break;
-      case 5:{float pk[3]={0.35f,0.65f,0.28f};for(int f=0;f<3;++f){float fx=cx-R+f*R;g.drawLine(fx,cy-8,fx,cy+8,1.3f);g.fillEllipse(fx-2.4f,cy-8+pk[f]*16-2.4f,4.8f,4.8f);} }break;
-      case 6:{juce::Path p;p.startNewSubPath(cx-R,cy);p.quadraticTo(cx-R/2,cy-8,cx,cy);p.quadraticTo(cx+R/2,cy+8,cx+R,cy);g.strokePath(p,juce::PathStrokeType(1.8f));}break;
-      case 7: g.drawEllipse(cx-(R-1),cy-(R-1),2*(R-1),2*(R-1),1.7f); g.drawLine(cx,cy,cx,cy-6,1.7f); g.drawLine(cx,cy,cx+5,cy+3,1.7f); break;
-      case 8:{for(int w=0;w<3;++w){float wy=cy-6+w*6;juce::Path p;p.startNewSubPath(cx-R,wy);p.quadraticTo(cx-R/2,wy-4,cx,wy);p.quadraticTo(cx+R/2,wy+4,cx+R,wy);g.strokePath(p,juce::PathStrokeType(1.4f));}}break;
+    static const char* mod[3]={"CHORUS","FLANGER","PHASER"};
+    static const char* dly[4]={"DIGITAL","ANALOG","TAPE","ECHO"};
+    static const char* rvb[6]={"ROOM","HALL","PLATE","SPRING","AMBIENT","SWELL"};
+    auto get=[this](const char* id){ return (int) proc.apvts.getRawParameterValue(id)->load(); };
+    if(fx==0) return mod[juce::jlimit(0,2,get(ArcaneEclipseProcessor::idModType))];
+    if(fx==1){
+        juce::String d=dly[juce::jlimit(0,3,get(ArcaneEclipseProcessor::idDelayType))];
+        if(delayTapMode()) d+=juce::String::fromUTF8(" \xc2\xb7 TAP");
+        return d;
     }
+    juce::String s=rvb[juce::jlimit(0,5,get(ArcaneEclipseProcessor::idReverbType))];
+    if(proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idReverbShimmer)->load()>0.5f) s+=" + SHIMMER";
+    return s;
 }
 
-void ArcaneEclipseEditor::paintAmpHead(juce::Graphics& g)
+void ArcaneEclipseEditor::showTypeMenu(int fx)
 {
-    static juce::Image amp = juce::ImageCache::getFromMemory(BinaryData::amp_png,BinaryData::amp_pngSize);
-    int ampY=kTopH+kStripH;
-    if(amp.isValid())
-        g.drawImage(amp,10,ampY,W-20,kAmpH,0,0,amp.getWidth(),amp.getHeight());
+    static const char* names[3][6]={{"Chorus","Flanger","Phaser",nullptr,nullptr,nullptr},
+                                    {"Digital","Analog","Tape","Echo",nullptr,nullptr},
+                                    {"Room","Hall","Plate","Spring","Ambient","Swell (auto volume swell)"}};
+    const char* ids[3]={ArcaneEclipseProcessor::idModType,ArcaneEclipseProcessor::idDelayType,
+                        ArcaneEclipseProcessor::idReverbType};
+    auto val=[this](const char* id){ return proc.apvts.getRawParameterValue(id)->load(); };
+    int cur=(int) val(ids[fx]);
+    juce::PopupMenu m;
+    m.addSectionHeader(fx==0?"Modulation type":fx==1?"Delay type":"Reverb type");
+    for(int i=0;i<6 && names[fx][i]!=nullptr;++i) m.addItem(i+1,names[fx][i],true,i==cur);
+    if(fx==1){
+        static const char* divs[4]={"1/4","Dotted 1/8","1/8","1/8 triplet"};
+        int dv=(int) val(ArcaneEclipseProcessor::idDelayTapDiv);
+        m.addSeparator();
+        m.addItem(200,"Footswitch = Tap tempo (hold = on/off)",true,delayTapMode());
+        juce::PopupMenu dm;
+        for(int i=0;i<4;++i) dm.addItem(210+i,divs[i],true,i==dv);
+        m.addSubMenu("Tap division",dm);
+    }
+    if(fx==2){
+        m.addSeparator();
+        m.addItem(100,"Shimmer (octave-up)",true,val(ArcaneEclipseProcessor::idReverbShimmer)>0.5f);
+    }
+    auto setParam=[this](const char* id,float v){
+        if(auto* p=proc.apvts.getParameter(id)){
+            p->beginChangeGesture(); p->setValueNotifyingHost(p->convertTo0to1(v)); p->endChangeGesture();
+        }
+    };
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&typeBtn[fx]),
+        [this,setParam,val,id=ids[fx]](int r){
+            if(r>=1 && r<=6) setParam(id,(float)(r-1));
+            else if(r==100) setParam(ArcaneEclipseProcessor::idReverbShimmer,val(ArcaneEclipseProcessor::idReverbShimmer)>.5f?0.f:1.f);
+            else if(r==200) setParam(ArcaneEclipseProcessor::idDelayTapMode,delayTapMode()?0.f:1.f);
+            else if(r>=210 && r<=213){ setParam(ArcaneEclipseProcessor::idDelayTapDiv,(float)(r-210)); proc.applyTapDivision(); }
+            repaint();
+        });
 }
 
-void ArcaneEclipseEditor::paintFXSection(juce::Graphics& g)
+void ArcaneEclipseEditor::paintPedalsLive(juce::Graphics& g)
 {
-    static juce::Image card = juce::ImageCache::getFromMemory(BinaryData::fxcard_png,BinaryData::fxcard_pngSize);
-    int fxY=kTopH+kStripH+kAmpH, cardW=196, stepp=208;
-    const char* titles[4]={"OVERDRIVE","MODULATION","DELAY","REVERB"};
     bool on[4]={ stompOD.getToggleState(), stompMod.getToggleState(),
                  stompDelay.getToggleState(), stompReverb.getToggleState() };
     for(int i=0;i<4;++i){
-        int x=10+i*stepp;
-        if(card.isValid())
-            g.drawImage(card,x,fxY,cardW,kFXH,0,0,card.getWidth(),card.getHeight());
-        haloText(g,titles[i],juce::Font(10.f).boldened(),juce::Colours::white,
-                 {x,fxY+14,cardW,16},juce::Justification::centred);
-        // power state dot — cover the baked art dot, then draw on/off state
-        float dx=x+cardW*0.907f, dy=fxY+kFXH*0.068f;
-        g.setColour(juce::Colour(0xff191922)); g.fillEllipse(dx-12,dy-12,24,24);
-        if(on[i]){
-            g.setColour(kPurple.withAlpha(0.35f)); g.fillEllipse(dx-12,dy-12,24,24);
-            g.setColour(kPurple);                  g.fillEllipse(dx-7,dy-7,14,14);
-            g.setColour(juce::Colour(0xffe6d2ff)); g.fillEllipse(dx-3,dy-3,6,6);
-        } else {
-            g.setColour(juce::Colour(0xff45455c)); g.drawEllipse(dx-6,dy-6,12,12,1.4f);
+        if(i==2 && delayTapMode()){
+            // tap mode: LED flashes on every repeat (at the TIME setting); dim when the delay is off
+            float tms=proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDelayTime)->load();
+            double t0=proc.lastTapMs.load(), now=juce::Time::getMillisecondCounterHiRes();
+            double ph=std::fmod(now-(t0>0?t0:0.0),(double)juce::jmax(20.f,tms));
+            bool flash = ph < juce::jmin(120.0, tms*0.45);
+            if(flash){
+                if(on[i]) ledGlow(g,kFootX[i],kLedY,5.f);
+                else { g.setColour(kPurple.withAlpha(0.45f)); g.fillEllipse(RF(kFootX[i]-4.5f,kLedY-4.5f,kFootX[i]+4.5f,kLedY+4.5f)); }
+            } else if(on[i]) { g.setColour(kPurple.withAlpha(0.35f)); g.fillEllipse(RF(kFootX[i]-4.f,kLedY-4.f,kFootX[i]+4.f,kLedY+4.f)); }
+        }
+        else if(on[i]) ledGlow(g,kFootX[i],kLedY,5.f);
+        {  // pill between the MIX/LEVEL label and the LED: effect type, or the OD capture
+            auto r=RF(kFootX[i]-60,795,kFootX[i]+60,810);
+            g.setColour(juce::Colour(0xcc0c0912)); g.fillRoundedRectangle(r,r.getHeight()*0.5f);
+            g.setColour(kPurple.withAlpha(0.55f)); g.drawRoundedRectangle(r.reduced(0.5f),r.getHeight()*0.5f,1.f);
+            g.setFont(juce::Font(SY(10.f)).boldened()); g.setColour(juce::Colour(0xffe6d2ff));
+            juce::String label = (i>0) ? typeName(i-1)
+                               : (proc.isODModelLoaded() ? proc.getODModelName().toUpperCase() : juce::String("BUILT-IN DRIVE"));
+            g.drawFittedText(label,r.withTrimmedRight(SX(13.f)).withTrimmedLeft(SX(4.f)).toNearestInt(),
+                             juce::Justification::centred,1,0.6f);
+            juce::Path c; float ax=r.getRight()-SX(11.f), ay=r.getCentreY();
+            c.addTriangle(ax-2.6f,ay-1.4f,ax+2.6f,ay-1.4f,ax,ay+1.8f);
+            g.setColour(kPurple); g.fillPath(c);
         }
     }
 }
 
-void ArcaneEclipseEditor::paintCabSection(juce::Graphics& g)
+void ArcaneEclipseEditor::showODMenu()
 {
-    static juce::Image cab = juce::ImageCache::getFromMemory(BinaryData::cabinet_png,BinaryData::cabinet_pngSize);
-    int fxY=kTopH+kStripH+kAmpH, cabX=844;
-    if(cab.isValid())
-        g.drawImage(cab,cabX,fxY,kCabW,kFXH,0,0,cab.getWidth(),cab.getHeight());
-    auto px=[&](float v){return cabX+(int)(v*kCabW/477.f);};
-    auto py=[&](float v){return fxY+(int)(v*kFXH/355.f);};
-    {int y0=py(74),y1=py(121);
-     haloText(g,"MODEL",juce::Font(8.f).boldened(),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
-     juce::String v=proc.isNAMLoaded()?proc.getLoadedNAMName():juce::String("No model loaded");
-     haloText(g,v,juce::Font(9.f),juce::Colour(0xffd4d4ee),{px(258),y0+(y1-y0)/2-2,px(430)-px(258),14},juce::Justification::centredLeft);}
-    {int y0=py(134),y1=py(175);
-     haloText(g,"IR",juce::Font(8.f).boldened(),kMuted,{px(258),y0+(y1-y0)/4-6,120,12},juce::Justification::centredLeft);
-     juce::String v=proc.isIRLoaded()?proc.getLoadedIRName():juce::String("No IR loaded");
-     haloText(g,v,juce::Font(9.f),juce::Colour(0xffd4d4ee),{px(258),y0+(y1-y0)/2-2,px(430)-px(258),14},juce::Justification::centredLeft);}
-    // arcane emblem in slot 3
-    {float ex=(float)px(345), ey=(float)py(214), R=8.f;
-     g.setColour(kPurDim.withAlpha(0.7f));
-     for(int k=0;k<3;++k){g.drawLine((float)px(258)+k*14.f,ey,(float)px(258)+k*14.f+8.f,ey,1.4f);
-        g.drawLine((float)px(432)-k*14.f-8.f,ey,(float)px(432)-k*14.f,ey,1.4f);}
-     g.setColour(kPurple.withAlpha(0.9f)); g.drawEllipse(ex-R,ey-R,2*R,2*R,1.3f);
-     g.setColour(kPurDim.withAlpha(0.5f)); g.drawEllipse(ex-R-3.5f,ey-R-3.5f,2*(R+3.5f),2*(R+3.5f),0.8f);
-     juce::Path st;st.startNewSubPath(ex,ey-R-2);st.lineTo(ex+2,ey);st.lineTo(ex,ey+R+2);st.lineTo(ex-2,ey);st.closeSubPath();
-     g.setColour(kPurple); g.fillPath(st);
-     juce::Path st2;st2.startNewSubPath(ex-R-2,ey);st2.lineTo(ex,ey-2);st2.lineTo(ex+R+2,ey);st2.lineTo(ex,ey+2);st2.closeSubPath();
-     g.setColour(juce::Colour(0xffc9a3ff)); g.fillPath(st2);
-     g.setColour(juce::Colour(0xffefe0ff)); g.fillEllipse(ex-1.7f,ey-1.7f,3.4f,3.4f);}
-    // (cabinet speaker logo removed — brand mark shown in the footer instead)
+    const bool loaded = proc.isODModelLoaded();
+    juce::PopupMenu m;
+    m.addSectionHeader(loaded ? "Pedal capture: " + proc.getODModelName() : juce::String("Overdrive: built-in drive"));
+    m.addItem(1, "Load pedal capture (.nam / .aecap)...");
+    m.addItem(2, "Use built-in drive", loaded, ! loaded);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&odBtn), [this](int r){
+        if(r==1){
+            chooserOD=std::make_unique<juce::FileChooser>("Load pedal capture (.nam / .aecap)",
+                juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),"*.nam;*.aecap");
+            chooserOD->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc){
+                    auto res=fc.getResults(); if(res.isEmpty()) return;
+                    juce::String err;
+                    if(! proc.loadODModel(res[0],err))
+                        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,"Arcane Eclipse",
+                            "Could not load "+res[0].getFileName()+":\n"+err);
+                    repaint();
+                });
+        }
+        else if(r==2){ proc.unloadODModel(); repaint(); }
+    });
 }
 
-void ArcaneEclipseEditor::paintSceneBar(juce::Graphics& g){ juce::ignoreUnused(g); }
-
-void ArcaneEclipseEditor::paintFooter(juce::Graphics& g)
+void ArcaneEclipseEditor::showFieldMenu(bool ir)
 {
-    int Y=kTopH+kStripH+kAmpH+kFXH+kSceneH;
-    juce::ColourGradient fg(juce::Colour(0xff0c0c12),0,(float)Y,juce::Colour(0xff08080e),0,(float)H,false);
-    g.setGradientFill(fg); g.fillRect(0,Y,W,kFootH);
-    g.setColour(kCardBd); g.drawHorizontalLine(Y,0.f,(float)W);
-    // Lower-left: developer credit (replaces the old Input Monitor)
-    g.setFont(juce::Font(13.f).boldened()); g.setColour(kMuted);
-    g.drawText("DEVELOPED BY AMARI LABS",18,Y,300,kFootH,juce::Justification::centredLeft);
-    // Centre: AMARI LABS mark (colour, artwork only), enlarged
-    static juce::Image amariMark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_color_png, BinaryData::logo_amari_mark_color_pngSize);
-    if(amariMark.isValid()){
-        int lh = kFootH - 4;
-        int lw = (int)(lh * amariMark.getWidth() / (float)amariMark.getHeight());
-        g.drawImage(amariMark, W/2 - lw/2, Y + (kFootH-lh)/2, lw, lh, 0,0,amariMark.getWidth(),amariMark.getHeight());
+    const int a = editSlot();
+    bool loaded = ir ? proc.isIRLoaded(a) : proc.isNAMLoaded(a);
+    juce::PopupMenu m;
+    if(loaded) m.addSectionHeader(ir ? proc.getLoadedIRName(a) : proc.getLoadedNAMName(a));
+    const bool dualOn = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    juce::String who = dualOn ? (a==0 ? " (amp 1)" : " (amp 2)") : juce::String();
+    m.addItem(1, (ir ? "Load IR..." : "Load model...") + who);
+    m.addItem(2, (ir ? "Clear IR" : "Clear model") + who, loaded);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(ir ? &fieldIR : &fieldModel),
+        [this,ir,a](int r){
+            if(r==1){ if(ir) btnLoadIR.onClick(); else btnLoadModel.onClick(); }
+            else if(r==2){ if(ir) proc.unloadIR(a); else proc.unloadNAMModel(a); repaint(); }
+        });
+}
+
+void ArcaneEclipseEditor::paintCabLive(juce::Graphics& g)
+{
+    const bool dualOn = proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDualOn)->load() > .5f;
+    const int a = editSlot();
+
+    // MODEL / IR names for the amp being edited
+    auto f=juce::Font(SY(13.f));
+    juce::String mv=proc.isNAMLoaded(a)?proc.getLoadedNAMName(a):juce::String("No model loaded");
+    haloText(g,mv,f,proc.isNAMLoaded(a)?kText:kMuted,RR(1302,667,1440,685),juce::Justification::centredLeft);
+    juce::String iv=proc.isIRLoaded(a)?proc.getLoadedIRName(a):juce::String("No IR loaded");
+    haloText(g,iv,f,proc.isIRLoaded(a)?kText:kMuted,RR(1302,726,1440,744),juce::Justification::centredLeft);
+
+    // Amp-number chips next to the baked MODEL / IR labels (dual only)
+    auto chip=[&](float rx,float ry){
+        auto r=RF(rx,ry-6.5f,rx+15.f,ry+6.5f);
+        g.setColour(kPurple); g.fillRoundedRectangle(r,r.getHeight()*0.5f);
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(SY(10.5f)).boldened());
+        g.drawText(juce::String(a+1),r,juce::Justification::centred,false);
+    };
+    if(dualOn){ chip(1349.f,661.f); chip(1317.f,720.f); }
+
+    // DUAL AMP/IR button: the render shows it "on"; dim it + its lamp when off
+    if(dualOn) ledGlow(g,1446.f,782.f,4.2f);
+    else {
+        auto r=RF(1291,763,1470,800);
+        g.setColour(juce::Colours::black.withAlpha(0.45f)); g.fillRoundedRectangle(r,SX(7.f));
+        g.setColour(juce::Colour(0xff15121c)); g.fillEllipse(RF(1441,777,1451,787));
     }
-    // Mono / Stereo indicator (click to toggle)
-    {
-        bool st = stereoBtn.getToggleState();
-        g.setColour(st ? kPurple : kMuted);
-        g.setFont(juce::Font(11.f).boldened());
-        g.drawText(st ? "STEREO" : "MONO", W-278, Y, 84, kFootH, juce::Justification::centred);
+
+    // [1] --MIX-- [2]
+    if(dualOn){
+        for(int i=0;i<2;++i){
+            auto r=ampSelBtn[i].getBounds().toFloat().reduced(0.5f);
+            bool sel=(editAmp==i);
+            bool has=proc.isNAMLoaded(i)||proc.isIRLoaded(i);
+            g.setColour(sel?kPurple.withAlpha(0.30f):juce::Colour(0xcc0c0912)); g.fillRoundedRectangle(r,5.f);
+            g.setColour(sel?kPurple:kPurple.withAlpha(0.40f));                  g.drawRoundedRectangle(r,5.f,sel?1.5f:1.f);
+            g.setFont(juce::Font(SY(15.f)).boldened());
+            g.setColour(sel?juce::Colours::white:(has?juce::Colour(0xffd8c8ec):kMuted));
+            g.drawText(juce::String(i+1),r,juce::Justification::centred,false);
+        }
+        if(! dualMix.isMouseOverOrDragging())      // value replaces the label while adjusting
+            haloText(g,"MIX",juce::Font(SY(9.5f)).boldened(),kMuted,
+                     dualMix.getBounds().withHeight(juce::roundToInt(SY(11.f))).translated(0,-juce::roundToInt(SY(3.f))),
+                     juce::Justification::centred);
     }
-    // Lower-right: AMP lights when a NAM model is loaded, CAB when an IR is loaded
-    g.setColour(proc.isNAMLoaded()?kPurple:juce::Colour(0xff2a2a34));
-    g.fillEllipse((float)(W-80),(float)(Y+13),8.f,8.f);
-    g.setFont(juce::Font(8.f)); g.setColour(kMuted);
-    g.drawText("AMP",W-70,Y+10,30,14,juce::Justification::centredLeft);
-    g.setColour(proc.isIRLoaded()?kPurple:juce::Colour(0xff2a2a34));
-    g.fillEllipse((float)(W-34),(float)(Y+13),8.f,8.f);
-    g.drawText("CAB",W-24,Y+10,26,14,juce::Justification::centredLeft);
+}
+
+void ArcaneEclipseEditor::paintScenesLive(juce::Graphics& g)
+{
+    for(int i=0;i<4;++i){
+        auto r=RF(kSlotX[i][0],kSlotY0,kSlotX[i][1],kSlotY1).reduced(1.f);
+        int idx=currentBank*kSlotsPerBank+i;
+        bool active=(activeScene==idx);
+        if(active){
+            g.setColour(kPurple.withAlpha(0.14f)); g.fillRoundedRectangle(r,6.f);
+            g.setColour(kPurple.withAlpha(0.30f)); g.drawRoundedRectangle(r.expanded(1.5f),7.f,3.f);
+            g.setColour(kPurple);                  g.drawRoundedRectangle(r,6.f,1.5f);
+        }
+        auto ri=r.toNearestInt();
+        haloText(g,slotCode(idx),juce::Font(SY(14.f)).boldened(),kPurple,
+                 ri.withTrimmedLeft(12).withWidth(34),juce::Justification::centredLeft);
+        bool empty=scenes[idx].isEmpty();
+        haloText(g,empty?juce::String("Empty"):scenes[idx].name,juce::Font(SY(15.f)).boldened(),
+                 empty?kMuted.withAlpha(0.55f):kText,ri.reduced(46,0),juce::Justification::centred);
+    }
+}
+
+void ArcaneEclipseEditor::paintFooterLive(juce::Graphics& g)
+{
+    // STEREO / MONO (repaint over the baked word so it can change)
+    bool st=stereoBtn.getToggleState();
+    g.setColour(kFooterFill); g.fillRect(RF(1270,998,1342,1019));
+    g.setFont(juce::Font(SY(14.f)).boldened());
+    g.setColour(st?kPurple:kMuted);
+    g.drawText(st?"STEREO":"MONO",RR(1262,998,1336,1019),juce::Justification::centredRight,false);
+    // AMP / CAB status lamps (baked rings light up when a model / IR is loaded)
+    bool d2=proc.isDualActive();
+    if(proc.isNAMLoaded(0) || (d2 && proc.isNAMLoaded(1))) ledGlow(g,1365.f,1008.f,4.f);
+    if(proc.isIRLoaded(0)  || (d2 && proc.isIRLoaded(1)))  ledGlow(g,1443.f,1008.f,4.f);
 }
 
 void ArcaneEclipseEditor::paintTuner(juce::Graphics& g)
 {
-    // Background (same as main panel) + dark overlay for readability
+    // ── v1.1.1 tuner redesign ────────────────────────────────────────────────
+    using juce::Colour; using juce::Path; using juce::PathStrokeType; namespace Colours = juce::Colours;
+    const float pi = juce::MathConstants<float>::pi;
+    const Colour green (0xff3fe0a0), lilac (0xffc9a3ff), dimSeg (0xff2a2236), panel (0xff0f0c16);
+
+    // backdrop: the plugin art, darkened, with a soft purple bloom behind the gauge
     static juce::Image bg = juce::ImageCache::getFromMemory(BinaryData::background_png,BinaryData::background_pngSize);
-    if(bg.isValid()){
-        float sc=juce::jmax((float)W/bg.getWidth(),(float)H/bg.getHeight());
-        int dw=(int)(bg.getWidth()*sc), dh=(int)(bg.getHeight()*sc);
-        g.drawImage(bg,(W-dw)/2,(H-dh)/2,dw,dh,0,0,bg.getWidth(),bg.getHeight());
-    } else g.fillAll(kBg);
-    g.setColour(juce::Colour(0xc60a0a12)); g.fillRect(0,0,W,H);
-    g.setColour(juce::Colour(0xff0c0c13)); g.fillRect(0,0,W,kTopH);
-    g.setColour(kPurple.withAlpha(.6f)); g.fillRect(0,kTopH-2,W,2);
-    g.setFont(juce::Font(16.f).boldened()); g.setColour(kText);
+    if(bg.isValid()) g.drawImage(bg,0,0,W,H,0,0,bg.getWidth(),bg.getHeight());
+    g.setColour(Colour(0xf309070f)); g.fillRect(0,0,W,H);
+    const bool sig    = tunerHz > 0.f;
+    const bool inTune = sig && std::fabs(tunerCents) < 3.f;
+    const Colour accent = inTune ? green : kPurple;
+    { juce::ColourGradient rg(accent.withAlpha(0.20f*(0.4f+0.6f*tunerSignal)),600.f,420.f,Colours::transparentBlack,600.f,420.f+520.f,true);
+      g.setGradientFill(rg); g.fillRect(0,0,W,H); }
+
+    // header
+    g.setColour(Colour(0xff0b0911)); g.fillRect(0,0,W,kTopH);
+    g.setColour(kPurple.withAlpha(.55f)); g.fillRect(0,kTopH-1,W,1);
+    g.setFont(juce::Font(juce::FontOptions(15.f,juce::Font::bold)).withExtraKerningFactor(0.32f)); g.setColour(kText);
     g.drawText("CHROMATIC TUNER",0,0,W,kTopH,juce::Justification::centred);
-    // X close button (top-right)
+    g.setFont(juce::Font(juce::FontOptions(11.f,juce::Font::bold)).withExtraKerningFactor(0.12f)); g.setColour(kMuted);
+    g.drawText("A4 = 440 Hz",24,0,200,kTopH,juce::Justification::centredLeft);
     juce::Rectangle<float> xr((float)(W-46),12.f,30.f,30.f);
-    g.setColour(juce::Colour(0xff212130)); g.fillRoundedRectangle(xr,5.f);
-    g.setColour(kPurple); g.drawRoundedRectangle(xr.reduced(0.5f),5.f,1.3f);
-    g.setColour(kText);
-    float xcx=xr.getCentreX(), xcy=xr.getCentreY();
-    g.drawLine(xcx-6,xcy-6,xcx+6,xcy+6,2.f); g.drawLine(xcx-6,xcy+6,xcx+6,xcy-6,2.f);
-    int cx=W/2,cy=H/2-20;
-    g.setColour(kCard); g.fillEllipse((float)(cx-180),(float)(cy-180),360.f,360.f);
-    g.setColour(kCardBd); g.drawEllipse((float)(cx-180),(float)(cy-180),360.f,360.f,2.f);
-    bool inTune=std::fabs(tunerCents)<3.f && tunerHz>0;
-    g.setColour(inTune?kGreen.withAlpha(.2f):kCard);
-    g.fillEllipse((float)(cx-40),(float)(cy-40),80.f,80.f);
-    if(tunerHz>0){
-        float angle=juce::MathConstants<float>::pi*(tunerCents/60.f);
-        float nx=cx+160.f*std::sin(angle),ny=cy-160.f*std::cos(angle);
-        g.setColour(inTune?kGreen:kPurple); g.drawLine((float)cx,(float)cy,nx,ny,3.f);
+    g.setColour(Colour(0xff1b1724)); g.fillRoundedRectangle(xr,6.f);
+    g.setColour(kPurple); g.drawRoundedRectangle(xr.reduced(0.5f),6.f,1.3f);
+    g.setColour(kText); { float a=xr.getCentreX(),b=xr.getCentreY(); g.drawLine(a-6,b-6,a+6,b+6,2.f); g.drawLine(a-6,b+6,a+6,b-6,2.f); }
+
+    // ── arc gauge: 51 LED segments, -50..+50 cents ───────────────────────────
+    const float cx=600.f, cy=500.f, R=300.f, span=1.2217f;          // +-70 degrees
+    const float c = juce::jlimit(-50.f,50.f,tunerDispCents);
+    auto polar=[&](float r,float a){ return juce::Point<float>(cx+r*std::sin(a), cy-r*std::cos(a)); };
+    { Path track; track.addCentredArc(cx,cy,R-20.f,R-20.f,0.f,-span-0.06f,span+0.06f,true);
+      g.setColour(panel); g.strokePath(track,PathStrokeType(56.f,PathStrokeType::curved,PathStrokeType::rounded));
+      g.setColour(kPurple.withAlpha(0.18f)); g.strokePath(track,PathStrokeType(57.f,PathStrokeType::curved,PathStrokeType::rounded));
+      g.setColour(panel); g.strokePath(track,PathStrokeType(55.f,PathStrokeType::curved,PathStrokeType::rounded)); }
+    for(int i=-25;i<=25;++i){
+        float cs=(float)i*2.f, a=cs/50.f*span;
+        bool major=(i%5==0);
+        float r0=major?R-42.f:R-34.f, r1=R-6.f;
+        bool lit = sig && ((c>=0.f && cs>=0.f && cs<=c+1.f) || (c<0.f && cs<=0.f && cs>=c-1.f));
+        bool head = sig && std::fabs(cs-c)<=1.f;
+        Colour col = dimSeg;
+        if(lit)  col = (std::fabs(cs)<=3.f ? green : lilac.interpolatedWith(kPurple,std::fabs(cs)/50.f)).withAlpha(0.85f*tunerSignal+0.15f);
+        if(head) col = inTune ? green : Colours::white;
+        if(i==0 && !lit) col = green.withAlpha(0.35f);
+        auto p0=polar(r0,a), p1=polar(r1,a);
+        if(lit||head){ g.setColour(col.withAlpha(0.22f)); g.drawLine({p0,p1},major?13.f:11.f); }
+        g.setColour(col); g.drawLine({p0,p1},major?5.f:3.6f);
     }
-    g.setFont(juce::Font(juce::FontOptions().withName("Georgia").withHeight(72.f).withStyle("Bold")));
-    g.setColour(inTune?kGreen:kText);
-    g.drawText(tunerHz>0?tunerNote:"--",cx-80,cy-50,160,100,juce::Justification::centred);
-    g.setFont(juce::Font(14.f)); g.setColour(kMuted);
-    if(tunerHz>0) g.drawText(juce::String(tunerCents,1)+" cents",cx-80,cy+50,160,24,juce::Justification::centred);
-    for(int c=-6;c<=6;++c){
-        float a=juce::MathConstants<float>::pi*(c/10.f);
-        float r1=150.f,r2=c==0?165.f:158.f;
-        float x1=cx+r1*std::sin(a),y1=cy-r1*std::cos(a);
-        float x2=cx+r2*std::sin(a),y2=cy-r2*std::cos(a);
-        g.setColour(c==0?kPurple:kCardBd); g.drawLine(x1,y1,x2,y2,c==0?2.f:1.f);
+    // scale labels
+    g.setFont(juce::Font(juce::FontOptions(11.f,juce::Font::bold)));
+    for(int v : {-50,-25,0,25,50}){
+        auto p=polar(R+18.f,(float)v/50.f*span);
+        g.setColour(v==0?green.withAlpha(0.8f):kMuted.withAlpha(0.8f));
+        g.drawText(v>0?"+"+juce::String(v):juce::String(v),juce::Rectangle<float>(p.x-22,p.y-8,44,16),juce::Justification::centred);
     }
-    g.setFont(juce::Font(11.f)); g.setColour(kMuted);
-    g.drawText(tunerHz>0?juce::String(tunerHz,1)+" Hz":"---",cx-80,cy+78,160,20,juce::Justification::centred);
-    g.setColour(kCardBd); g.drawHorizontalLine(H-kFootH,0.f,(float)W);
-    g.setFont(juce::Font(9.f)); g.setColour(kMuted);
-    g.drawText("Click the X (top-right) or the fork icon to close",0,H-kFootH,W,kFootH,juce::Justification::centred);
+    // pointer riding the arc (no needle crossing the note readout)
+    { float na=c/50.f*span, al=0.30f+0.70f*tunerSignal;
+      auto q0=polar(R-48.f,na), q1=polar(R+2.f,na);
+      g.setColour(accent.withAlpha(0.20f*al)); g.drawLine({q0,q1},14.f);
+      g.setColour((inTune?green:Colours::white).withAlpha(al)); g.drawLine({q0,q1},3.f);
+      Path tip; auto t0=polar(R-54.f,na), tl=polar(R-70.f,na-0.035f), tr=polar(R-70.f,na+0.035f);
+      tip.addTriangle(t0.x,t0.y,tl.x,tl.y,tr.x,tr.y);
+      g.setColour(accent.withAlpha(al)); g.fillPath(tip); }
+
+    // ── note readout ─────────────────────────────────────────────────────────
+    {
+        juce::String letter="-", sharp, octave;
+        if(sig && tunerNote.isNotEmpty()){
+            letter=tunerNote.substring(0,1);
+            int k=1; if(tunerNote.length()>1 && tunerNote[1]=='#'){ sharp=juce::String::fromUTF8("\xe2\x99\xaf"); k=2; }
+            octave=tunerNote.substring(k);
+        }
+        juce::Font big(juce::FontOptions(150.f,juce::Font::bold));
+        juce::GlyphArrangement ga; ga.addLineOfText(big,letter,0.f,0.f);
+        float lw=ga.getBoundingBox(0,-1,true).getWidth();
+        juce::Rectangle<float> lr(cx-lw*0.5f-4.f,248.f,lw+8.f,150.f);
+        Colour nc = !sig ? kMuted.withAlpha(0.35f) : (inTune ? green : Colours::white);
+        if(sig){                                                     // soft glow
+            g.setFont(big); g.setColour(accent.withAlpha(0.10f));
+            for(int dx=-4;dx<=4;dx+=2) for(int dy=-4;dy<=4;dy+=2) if(dx||dy) g.drawText(letter,lr.translated((float)dx,(float)dy),juce::Justification::centred,false);
+        }
+        g.setFont(big); g.setColour(nc); g.drawText(letter,lr,juce::Justification::centred,false);
+        g.setFont(juce::Font(juce::FontOptions(52.f,juce::Font::bold))); g.setColour(nc);
+        if(sharp.isNotEmpty()) g.drawText(sharp,juce::Rectangle<float>(lr.getRight()-2.f,262.f,60.f,56.f),juce::Justification::centredLeft,false);
+        g.setFont(juce::Font(juce::FontOptions(34.f,juce::Font::bold))); g.setColour(nc.withAlpha(sig?0.7f:0.3f));
+        if(octave.isNotEmpty()) g.drawText(octave,juce::Rectangle<float>(lr.getRight()+2.f,346.f,50.f,40.f),juce::Justification::centredLeft,false);
+        if(!sig){
+            g.setFont(juce::Font(juce::FontOptions(12.f,juce::Font::bold)).withExtraKerningFactor(0.3f)); g.setColour(kMuted.withAlpha(0.8f));
+            g.drawText("PLAY A SINGLE STRING",juce::Rectangle<float>(cx-160,392,320,20),juce::Justification::centred,false);
+        }
+    }
+
+    // flat / sharp arrows + IN TUNE badge
+    {
+        bool flat=sig && tunerCents<=-3.f, sharpOn=sig && tunerCents>=3.f;
+        auto tri=[&](float x,float y,bool left,bool on){
+            Path t; if(left) t.addTriangle(x+12,y-14,x+12,y+14,x-12,y); else t.addTriangle(x-12,y-14,x-12,y+14,x+12,y);
+            if(on){ g.setColour(kPurple.withAlpha(0.30f)); g.strokePath(t,PathStrokeType(8.f)); }
+            g.setColour(on?lilac:dimSeg); g.fillPath(t);
+        };
+        tri(cx-150.f,441.f,true,flat); tri(cx+150.f,441.f,false,sharpOn);
+        juce::Rectangle<float> badge(cx-64.f,427.f,128.f,28.f);
+        g.setColour(inTune?green.withAlpha(0.18f):Colour(0xaa0c0912)); g.fillRoundedRectangle(badge,14.f);
+        g.setColour(inTune?green:kPurple.withAlpha(0.45f)); g.drawRoundedRectangle(badge.reduced(0.5f),14.f,1.3f);
+        g.setFont(juce::Font(juce::FontOptions(12.f,juce::Font::bold)).withExtraKerningFactor(0.25f));
+        g.setColour(inTune?green:(sig?lilac:kMuted.withAlpha(0.6f)));
+        g.drawText(inTune?"IN TUNE":(flat?"FLAT":(sharpOn?"SHARP":"TUNER")),badge,juce::Justification::centred,false);
+    }
+
+    // cents + Hz readout
+    {
+        juce::String cTxt = sig ? (tunerCents>=0.f?"+":"")+juce::String(tunerCents,1)+juce::String::fromUTF8(" \xc2\xa2") : juce::String("--");
+        juce::String hTxt = sig ? juce::String(tunerHz,1)+" Hz" : juce::String("--- Hz");
+        g.setFont(juce::Font(juce::FontOptions(20.f,juce::Font::bold)));
+        g.setColour(sig?kText:kMuted.withAlpha(0.5f));
+        g.drawText(cTxt,juce::Rectangle<float>(cx-230,cy-6,200,26),juce::Justification::centredRight,false);
+        g.drawText(hTxt,juce::Rectangle<float>(cx+30,cy-6,200,26),juce::Justification::centredLeft,false);
+        g.setColour(kPurple.withAlpha(0.6f)); g.fillEllipse(cx-3.f,cy+4.f,6.f,6.f);
+    }
+
+    // ── strobe band: stripes drift left (flat) / right (sharp), stand still in tune
+    {
+        juce::Rectangle<float> sb(330.f,585.f,540.f,38.f);
+        g.setColour(panel); g.fillRoundedRectangle(sb,9.f);
+        juce::Graphics::ScopedSaveState ss(g);
+        Path clip; clip.addRoundedRectangle(sb.reduced(1.f),8.f); g.reduceClipRegion(clip);
+        const float period=26.f, off=std::fmod(tunerStrobe,period)+(tunerStrobe<0.f?period:0.f);
+        Colour sc = !sig ? dimSeg : (inTune ? green : kPurple);
+        float sa = !sig ? 0.6f : 0.55f+0.35f*tunerSignal;
+        for(float x=sb.getX()-2.f*period+off; x<sb.getRight()+period; x+=period){
+            Path st; st.startNewSubPath(x,sb.getBottom()); st.lineTo(x+10.f,sb.getBottom()); st.lineTo(x+22.f,sb.getY()); st.lineTo(x+12.f,sb.getY()); st.closeSubPath();
+            g.setColour(sc.withAlpha(sa)); g.fillPath(st);
+        }
+        juce::ColourGradient fl(panel,sb.getX(),0.f,panel.withAlpha(0.f),sb.getX()+90.f,0.f,false); g.setGradientFill(fl); g.fillRect(sb.withWidth(90.f));
+        juce::ColourGradient fr(panel.withAlpha(0.f),sb.getRight()-90.f,0.f,panel,sb.getRight(),0.f,false); g.setGradientFill(fr); g.fillRect(sb.withTrimmedLeft(sb.getWidth()-90.f));
+    }
+    g.setColour((inTune?green:kPurple).withAlpha(0.5f)); g.drawRoundedRectangle(juce::Rectangle<float>(330.f,585.f,540.f,38.f),9.f,1.2f);
+    g.setFont(juce::Font(juce::FontOptions(10.f,juce::Font::bold)).withExtraKerningFactor(0.25f)); g.setColour(kMuted.withAlpha(0.75f));
+    g.drawText("FLAT",juce::Rectangle<float>(330.f,627.f,120.f,16.f),juce::Justification::centredLeft,false);
+    g.drawText("STROBE",juce::Rectangle<float>(cx-60.f,627.f,120.f,16.f),juce::Justification::centred,false);
+    g.drawText("SHARP",juce::Rectangle<float>(750.f,627.f,120.f,16.f),juce::Justification::centredRight,false);
+
+    // ── standard-tuning string guide ─────────────────────────────────────────
+    {
+        static const char* nm[6]={"E","A","D","G","B","E"}; static const char* oc[6]={"2","2","3","3","3","4"};
+        static const float hz[6]={82.41f,110.f,146.83f,196.f,246.94f,329.63f};
+        int near=-1; float best=1e9f;
+        if(sig) for(int i=0;i<6;++i){ float d=std::fabs(1200.f*std::log2(tunerHz/hz[i])); if(d<best){best=d;near=i;} }
+        if(best>250.f) near=-1;                                      // not close to any open string
+        const float pw=74.f, gap=12.f, x0=cx-(6*pw+5*gap)*0.5f, y=672.f;
+        for(int i=0;i<6;++i){
+            juce::Rectangle<float> r(x0+i*(pw+gap),y,pw,46.f);
+            bool on=(i==near); bool ok=on&&inTune;
+            g.setColour(ok?green.withAlpha(0.16f):(on?kPurple.withAlpha(0.22f):Colour(0xcc0e0b15))); g.fillRoundedRectangle(r,8.f);
+            g.setColour(ok?green:(on?kPurple:kPurple.withAlpha(0.22f))); g.drawRoundedRectangle(r.reduced(0.5f),8.f,on?1.6f:1.f);
+            g.setFont(juce::Font(juce::FontOptions(19.f,juce::Font::bold))); g.setColour(ok?green:(on?Colours::white:kMuted));
+            g.drawText(juce::String(nm[i])+oc[i],r.withHeight(28.f).translated(0,4.f),juce::Justification::centred,false);
+            g.setFont(juce::Font(juce::FontOptions(10.f))); g.setColour((on?lilac:kMuted).withAlpha(0.8f));
+            g.drawText(juce::String(hz[i],1)+" Hz",r.withTrimmedTop(28.f).withHeight(14.f),juce::Justification::centred,false);
+        }
+        g.setFont(juce::Font(juce::FontOptions(10.f,juce::Font::bold)).withExtraKerningFactor(0.25f)); g.setColour(kMuted.withAlpha(0.7f));
+        g.drawText("STANDARD TUNING",juce::Rectangle<float>(cx-100.f,y-20.f,200.f,14.f),juce::Justification::centred,false);
+    }
+
+    // footer
+    g.setColour(kPurple.withAlpha(0.35f)); g.fillRect(0,H-kFootH,W,1);
+    g.setFont(juce::Font(juce::FontOptions(10.5f))); g.setColour(kMuted.withAlpha(0.8f));
+    g.drawText(juce::String::fromUTF8("Click \xe2\x9c\x95 (top-right) to return to the rig"),0,H-kFootH,W,kFootH,juce::Justification::centred);
 }
