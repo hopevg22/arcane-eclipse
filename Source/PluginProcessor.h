@@ -52,6 +52,16 @@ public:
     bool isNAMLoaded(int slot = 0) const { return amps[slotIdx(slot)].model != nullptr; }
     bool isIRLoaded (int slot = 0) const { return amps[slotIdx(slot)].irLoaded; }
     bool isDualActive() const;          // Dual on AND amp 2 has a model or an IR
+
+    // ── Overdrive pedal capture (v1.1.1) ─────────────────────────────────────
+    // A NAM pedal capture loaded here replaces the built-in drive circuit.
+    // DRIVE = input level into the capture (+-12 dB), TONE = treble tilt
+    // (+-6 dB, flat at noon), LEVEL = output (-24..+6 dB, 0 dB at the default).
+    bool loadODModel(const juce::File& f, juce::String& error);   // .nam or .aecap
+    void unloadODModel();
+    bool isODModelLoaded() const { return odSlot.model != nullptr; }
+    juce::String getODModelName() const { return odSlot.namName; }
+    juce::String getODModelPath() const { return odSlot.namPath; }
     static juce::File aecapCacheDir();
 
     // MIDI learn
@@ -147,6 +157,10 @@ private:
         juce::String namName, irName, namPath, irPath;
     };
     AmpSlot amps[kNumAmpSlots];
+    AmpSlot odSlot;                                          // overdrive pedal capture (no IR)
+    std::vector<float> odMono, odOut;
+    float odTiltZ[2] = { 0.f, 0.f };
+    void makeMono(const juce::AudioBuffer<float>& b, int numSamples, float* dst) const;
     static int slotIdx(int s) { return juce::jlimit(0, kNumAmpSlots - 1, s); }
     void runNAM(AmpSlot& a, const float* in, float* out, int numSamples);
     NeuralAudio::NeuralModelLoader namLoader;
@@ -193,6 +207,7 @@ private:
     float tunerStable = 0.f;
     float tunerHist[5] = {0,0,0,0,0};
     int   tunerHistCount = 0;
+    int   tunerOctRun = 0;                                   // consecutive octave-jump frames
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseProcessor)
 };

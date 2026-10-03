@@ -118,6 +118,12 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     dualMixSm.setCurrentAndTargetValue(apvts.getRawParameterValue(idDualMix)->load());
     monoBuf       .assign((size_t)(samplesPerBlock + 32),     0.f);
     namOutBuf     .assign((size_t)(samplesPerBlock + 32),     0.f);
+    odSlot.upIn .assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+    odSlot.upOut.assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
+    odSlot.rsIn.reset(); odSlot.rsOut.reset();
+    odMono.assign((size_t)(samplesPerBlock + 32), 0.f);
+    odOut .assign((size_t)(samplesPerBlock + 32), 0.f);
+    odTiltZ[0] = odTiltZ[1] = 0.f;
     tunerBuf.assign(2048, 0.f); tunerFill = 0; tunerFreq.store(0.f);
     { int maxLag = (int)(sampleRate / 55.0) + 2;             // YIN scratch (RT-safe: prealloc)
       tunerD.assign((size_t) maxLag + 1, 0.0); tunerDP.assign((size_t) maxLag + 1, 1.0); }
@@ -266,11 +272,32 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 4. OVERDRIVE — pre-amp drive pedal
     if (apvts.getRawParameterValue(idODOn)->load() > .5f) {
-        overdrive.setParameters(
-            apvts.getRawParameterValue(idODDrive)->load(),
-            apvts.getRawParameterValue(idODTone)->load(),
-            apvts.getRawParameterValue(idODLevel)->load());
-        overdrive.processBlock(buffer);
+        const float drv = apvts.getRawParameterValue(idODDrive)->load();
+        const float ton = apvts.getRawParameterValue(idODTone)->load();
+        const float lvl = apvts.getRawParameterValue(idODLevel)->load();
+        if (odSlot.model != nullptr) {
+            // Pedal capture replaces the built-in circuit (mono in -> capture -> both channels)
+            if ((int) odMono.size() < numSamples + 8) odMono.assign((size_t)(numSamples + 16), 0.f);
+            if ((int) odOut .size() < numSamples + 8) odOut .assign((size_t)(numSamples + 16), 0.f);
+            makeMono(buffer, numSamples, odMono.data());
+            const float inG  = juce::Decibels::decibelsToGain((drv - 0.5f) * 24.f);                  // +-12 dB
+            const float outDb = lvl >= 0.7f ? (lvl - 0.7f) / 0.3f * 6.f : (lvl - 0.7f) / 0.7f * 24.f;
+            const float outG = juce::Decibels::decibelsToGain(outDb);                                // -24..+6 dB
+            const float hiG  = juce::Decibels::decibelsToGain((ton - 0.5f) * 12.f);                  // +-6 dB tilt
+            const float a = std::exp(-2.f * juce::MathConstants<float>::pi * 800.f / (float) currentSampleRate);
+            for (int n = 0; n < numSamples; ++n) odMono[(size_t) n] *= inG;
+            runNAM(odSlot, odMono.data(), odOut.data(), numSamples);
+            for (int n = 0; n < numSamples; ++n) {
+                float x = odOut[(size_t) n];
+                odTiltZ[0] = a * odTiltZ[0] + (1.f - a) * x;                  // lows below ~800 Hz
+                odOut[(size_t) n] = outG * (odTiltZ[0] + hiG * (x - odTiltZ[0]));
+            }
+            for (int ch = 0; ch < numCh; ++ch)
+                std::copy(odOut.begin(), odOut.begin() + numSamples, buffer.getWritePointer(ch));
+        } else {
+            overdrive.setParameters(drv, ton, lvl);
+            overdrive.processBlock(buffer);
+        }
     }
 
     // 5. AMP GAIN — pre-NAM input level
@@ -284,16 +311,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     const bool dual = isDualActive();
     if ((int)monoBuf.size()   < numSamples + 8) monoBuf  .assign((size_t)(numSamples + 16), 0.f);
     if ((int)namOutBuf.size() < numSamples + 8) namOutBuf.assign((size_t)(numSamples + 16), 0.f);
-    auto buildMono = [&]{
-        float magL = buffer.getMagnitude(0, 0, numSamples);
-        float magR = (numCh > 1) ? buffer.getMagnitude(1, 0, numSamples) : 0.f;
-        bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f
-                          && magL < magR * 4.0f && magR < magL * 4.0f);
-        float mScale = dualMono ? 0.5f : 1.0f;
-        auto* L = buffer.getReadPointer(0);
-        for (int n = 0; n < numSamples; ++n)
-            monoBuf[(size_t)n] = (numCh > 1) ? mScale * (L[n] + buffer.getReadPointer(1)[n]) : L[n];
-    };
+    auto buildMono = [&]{ makeMono(buffer, numSamples, monoBuf.data()); };
 
     if (! dual)
     {
@@ -464,6 +482,50 @@ void ArcaneEclipseProcessor::runNAM(AmpSlot& a, const float* in, float* out, int
     for (int n = actualDown; n < numSamples; ++n) out[n] = 0.f;
 }
 
+void ArcaneEclipseProcessor::makeMono(const juce::AudioBuffer<float>& b, int numSamples, float* dst) const
+{
+    const int numCh = b.getNumChannels();
+    float magL = b.getMagnitude(0, 0, numSamples);
+    float magR = (numCh > 1) ? b.getMagnitude(1, 0, numSamples) : 0.f;
+    bool  dualMono = (magL > 1.0e-3f && magR > 1.0e-3f && magL < magR * 4.0f && magR < magL * 4.0f);
+    float mScale = dualMono ? 0.5f : 1.0f;
+    auto* L = b.getReadPointer(0);
+    for (int n = 0; n < numSamples; ++n)
+        dst[n] = (numCh > 1) ? mScale * (L[n] + b.getReadPointer(1)[n]) : L[n];
+}
+
+// ── Overdrive pedal capture ──────────────────────────────────────────────────
+bool ArcaneEclipseProcessor::loadODModel(const juce::File& f, juce::String& error)
+{
+    juce::File namFile = f;
+    if (f.getFileExtension().equalsIgnoreCase(".aecap")) {
+        auto c = AecapLoader::loadFile(f);
+        if (! c.ok) { error = c.error; return false; }
+        namFile = c.materializeModelTo(aecapCacheDir());          // any IR in the pack is ignored for a pedal
+    }
+    if (! namFile.existsAsFile()) { error = "File not found."; return false; }
+    try {
+        auto* raw = namLoader.CreateFromFile(namFile.getFullPathName().toStdString());
+        if (! raw) { error = "Not a valid NAM model."; return false; }
+        std::unique_ptr<NeuralAudio::NeuralModel> model(raw);
+        const juce::ScopedLock lock(getCallbackLock());
+        odSlot.model = std::move(model);
+        odSlot.namName = f.getFileNameWithoutExtension();
+        odSlot.namPath = f.getFullPathName();
+        odSlot.rsIn.reset(); odSlot.rsOut.reset();
+        std::fill(odSlot.upIn.begin(),  odSlot.upIn.end(),  0.f);
+        std::fill(odSlot.upOut.begin(), odSlot.upOut.end(), 0.f);
+        odTiltZ[0] = odTiltZ[1] = 0.f;
+        return true;
+    } catch (...) { error = "The model could not be loaded."; return false; }
+}
+
+void ArcaneEclipseProcessor::unloadODModel()
+{
+    const juce::ScopedLock lock(getCallbackLock());
+    odSlot.model.reset(); odSlot.namName = {}; odSlot.namPath = {};
+}
+
 bool ArcaneEclipseProcessor::isDualActive() const
 {
     return apvts.getRawParameterValue(idDualOn)->load() > .5f
@@ -567,6 +629,7 @@ void ArcaneEclipseProcessor::getStateInformation(juce::MemoryBlock& d)
             e->setAttribute("nam", amps[i].namPath);
             e->setAttribute("ir",  amps[i].irPath);
         }
+        am->setAttribute("od", odSlot.namPath);                  // overdrive pedal capture
         copyXmlToBinary(*xml, d);
     }
 }
@@ -584,7 +647,9 @@ void ArcaneEclipseProcessor::setStateInformation(const void* data, int sizeInByt
             xml->removeChildElement(mm, true);
         }
         juce::StringArray namP, irP;
+        juce::String odP; bool haveAmps = false;
         if (auto* am = xml->getChildByName("AMPS")) {
+            haveAmps = true; odP = am->getStringAttribute("od");
             for (auto* e : am->getChildIterator()) {
                 namP.add(e->getStringAttribute("nam")); irP.add(e->getStringAttribute("ir"));
             }
@@ -599,6 +664,11 @@ void ArcaneEclipseProcessor::setStateInformation(const void* data, int sizeInByt
             else unloadNAMModel(i);
             if (irP[i].isNotEmpty() && irP[i] != namP[i] && irf.existsAsFile()) { if (irP[i] != amps[i].irPath) loadIR(irf, i); }
             else if (irP[i].isEmpty()) unloadIR(i);
+        }
+        if (haveAmps) {
+            juce::String err;
+            if (odP.isNotEmpty() && juce::File(odP).existsAsFile()) { if (odP != odSlot.namPath) loadODModel(juce::File(odP), err); }
+            else unloadODModel();
         }
     }
 }
@@ -737,14 +807,26 @@ float ArcaneEclipseProcessor::detectPitch(const float* buf, int n, double sr)
     return (tauEst > 0.0) ? (float) (sr / tauEst) : 0.0f;
 }
 
-// Octave-snap + 5-frame median smoothing: kills residual octave jumps and
-// jitter so the readout holds steady.
+// Octave-error correction + 5-frame median smoothing.
+// Only a jump of almost exactly an octave (+-3 %) away from the running estimate
+// is treated as a detection error and folded back; any other jump (changing to
+// another string) is accepted at once. A genuine octave change (e.g. a 12th-fret
+// note) is accepted once it persists for 5 frames (~0.2 s). Silence resets.
+// (v1.1 folded EVERY large jump into the previous note's octave, so moving
+// G3 -> E4 read "E3".)
 float ArcaneEclipseProcessor::smoothTunerPitch(float raw)
 {
-    if (raw <= 0.0f) { tunerHistCount = 0; return 0.0f; }     // reset on silence
+    if (raw <= 0.0f) { tunerHistCount = 0; tunerStable = 0.0f; tunerOctRun = 0; return 0.0f; }
     if (tunerStable > 0.0f) {
-        while (raw > 1.5f  * tunerStable) raw *= 0.5f;        // snap toward the running estimate
-        while (raw < 0.67f * tunerStable) raw *= 2.0f;
+        const float r = raw / tunerStable;
+        const bool octUp = std::abs(r - 2.0f) < 0.06f, octDn = std::abs(r - 0.5f) < 0.015f;
+        if (octUp || octDn) {
+            if (++tunerOctRun < 5) raw = octUp ? raw * 0.5f : raw * 2.0f;   // fold back a probable error
+            else { tunerHistCount = 0; tunerStable = 0.0f; tunerOctRun = 0; }  // persisted: real octave change
+        } else {
+            tunerOctRun = 0;
+            if (r > 1.06f || r < 0.94f) { tunerHistCount = 0; tunerStable = 0.0f; }  // new note: restart smoothing
+        }
     }
     // rolling 5-sample median
     for (int i = juce::jmin(tunerHistCount, 4); i > 0; --i) tunerHist[i] = tunerHist[i - 1];

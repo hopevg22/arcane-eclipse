@@ -54,6 +54,7 @@ struct AEKnob {
 struct SceneData {
     juce::String namPath, irPath, name{"Empty"};
     juce::String namPath2, irPath2;          // v1.1: amp 2 (Dual Amp/IR)
+    juce::String odPath;                     // v1.1.1: overdrive pedal capture
     juce::ValueTree params;
     bool isEmpty() const { return name == "Empty"; }
 };
@@ -118,6 +119,7 @@ private:
     void showTypeMenu(int fx);                 // 0 = MOD, 1 = DELAY, 2 = REVERB
     juce::String typeName(int fx) const;
     void showFieldMenu(bool ir);               // MODEL / IR field dropdown
+    void showODMenu();                         // overdrive capture pill
 
     void saveScene(int slot);
     void loadScene(int slot);
@@ -193,6 +195,10 @@ private:
     juce::TextButton fieldModel, fieldIR, dualBtn, typeBtn[3];
     // v1.1 Dual Amp/IR: [1] --MIX-- [2] row under the DUAL AMP/IR button
     juce::TextButton ampSelBtn[2];
+    juce::TextButton odBtn;                          // overdrive pedal capture pill
+    // tuner animation state (v1.1.1 redesign)
+    float tunerDispCents = 0.f, tunerStrobe = 0.f, tunerSignal = 0.f;
+    double tunerLastTick = 0.0;
     juce::Slider dualMix{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attDual;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attDualMix;
@@ -208,7 +214,7 @@ private:
     juce::ToggleButton presetPrev, presetNext;
     juce::TextButton headerSave{"SAVE"};
 
-    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR,chooserExport,chooserImport;
+    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR,chooserExport,chooserImport,chooserOD;
     juce::TooltipWindow tooltipWin{this, 600};
     static const juce::String kChainLabels[9];
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseEditor)
