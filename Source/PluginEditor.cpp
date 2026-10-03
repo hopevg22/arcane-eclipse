@@ -374,10 +374,12 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     dualMix.setLookAndFeel(&laf);
     dualMix.setMouseCursor(juce::MouseCursor::PointingHandCursor);
     dualMix.setTooltip("Blend between amp 1 and amp 2");
-    dualMix.setDoubleClickReturnValue(true,0.5);
+    dualMix.setDoubleClickReturnValue(true,0.5);       // double-click = 50/50
+    dualMix.setSliderSnapsToMousePosition(false);      // drag is relative: clicks never jump the blend
     attDualMix=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         p.apvts,ArcaneEclipseProcessor::idDualMix,dualMix);
     addChildComponent(dualMix);
+    dualMix.addMouseListener(this,false);          // right-click -> MIDI learn (expression pedal)
 
     addAndMakeVisible(btnLoadModel);
     btnLoadModel.onClick=[this]{
@@ -616,15 +618,15 @@ void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
             });
         return;
     }
-    AEKnob* hit=nullptr;
-    for(auto* k:allKnobs) if(&k->slider==e.eventComponent){ hit=k; break; }
-    if(hit==nullptr) return;
-    juce::String pid=hit->paramID;
+    juce::Slider* hitSlider=nullptr; juce::String pid;
+    for(auto* k:allKnobs) if(&k->slider==e.eventComponent){ hitSlider=&k->slider; pid=k->paramID; break; }
+    if(hitSlider==nullptr && e.eventComponent==&dualMix){ hitSlider=&dualMix; pid=ArcaneEclipseProcessor::idDualMix; }
+    if(hitSlider==nullptr) return;
     int cc=proc.ccForParam(pid);
     juce::PopupMenu m;
     m.addItem(1, cc<0 ? "MIDI Learn" : "MIDI Learn (re-assign)");
     if(cc>=0) m.addItem(2, "Clear MIDI (CC "+juce::String(cc)+")");
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&hit->slider),
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(hitSlider),
         [this,pid](int r){
             if(r==1){ proc.midiLearnStart(pid); learningID=pid; }
             else if(r==2){ proc.midiLearnClear(pid); }
@@ -958,6 +960,12 @@ void ArcaneEclipseEditor::paintOverChildren(juce::Graphics& g)
         g.drawRoundedRectangle(b,b.getWidth()*0.5f,2.5f);
         haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
                  {k->slider.getX()-12,k->slider.getY()-13,k->slider.getWidth()+24,12},juce::Justification::centred);
+    }
+    if(learningID==ArcaneEclipseProcessor::idDualMix && dualMix.isVisible()){
+        auto b=dualMix.getBounds().toFloat().expanded(3.f);
+        g.setColour(kPurple.withAlpha(0.35f+0.55f*pulse)); g.drawRoundedRectangle(b,6.f,2.5f);
+        haloText(g,"LEARN",juce::Font(8.f).boldened(),kPurple,
+                 {dualMix.getX(),dualMix.getY()-13,dualMix.getWidth(),12},juce::Justification::centred);
     }
     for(auto& nl:nodeLearns) if(nl.pid==learningID){
         auto nb=chainNodeBounds(nl.nodeIdx);
