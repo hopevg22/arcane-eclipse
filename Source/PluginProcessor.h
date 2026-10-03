@@ -71,6 +71,14 @@ public:
     int  ccForAction(int action) const;
     int  actionLearningNow() const;
     int  takePendingAction();          // returns a pending action then clears it (-1 = none)
+
+    // Tap tempo (v1.1.1): each call is one tap; sets the delay TIME from the
+    // averaged tap interval x the chosen division. Safe from UI or audio thread.
+    void tapTempo();
+    void undoLastTap();                // a footswitch HOLD (on/off) shouldn't count as a tap
+    void applyTapDivision();           // re-derive TIME from the last tapped beat
+    std::atomic<double> lastTapMs { -1.0 };            // for the UI tempo LED
+    std::atomic<float>  tapBeatMs { 0.f };             // last tapped beat (quarter note), 0 = none
     void cancelLearn();                // cancel any in-progress learn (knob/node/action)
 
     juce::AudioProcessorValueTreeState apvts;
@@ -114,6 +122,8 @@ public:
     static constexpr auto idDelayFeedback = "delayFeedback";
     static constexpr auto idDelayMix      = "delayMix";
     static constexpr auto idDelayType     = "delayType";
+    static constexpr auto idDelayTapMode  = "delayTapMode";   // v1.1.1 footswitch = tap tempo
+    static constexpr auto idDelayTapDiv   = "delayTapDiv";    // 0 1/4, 1 dotted 1/8, 2 1/8, 3 1/8 triplet
     // Reverb
     static constexpr auto idReverbOn    = "reverbOn";
     static constexpr auto idReverbDecay = "reverbDecay";
@@ -159,6 +169,9 @@ private:
     float dcX1[2] = {0.f,0.f}, dcY1[2] = {0.f,0.f};  // DC blocker state
     bool  prevReverbOn = false;                     // reset reverb tail on enable
     bool  prevDelayOn  = false;                     // reset delay buffer on enable (v1.0.2)
+    double tapTimes[4] = { 0, 0, 0, 0 }; int tapCount = 0;   // tap-tempo history (ms)
+    float  timeBeforeTap = -1.f;  float beatBeforeTap = 0.f;
+    juce::SpinLock tapLock;
 
     // MIDI learn state
     std::vector<juce::String> learnParamIDs;

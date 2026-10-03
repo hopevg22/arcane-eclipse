@@ -344,7 +344,10 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
         t->setMouseCursor(juce::MouseCursor::PointingHandCursor);
     attFsOD    =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idODOn,    fsOD);
     attFsMod   =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idModOn,   fsMod);
-    attFsDelay =std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idDelayOn, fsDelay);
+    // DELAY footswitch is handled by hand (v1.1.1): normally on/off; in tap mode a
+    // press = TAP and a long hold = on/off (see mouseDown / mouseUp)
+    fsDelay.setClickingTogglesState(false);
+    fsDelay.addMouseListener(this,false);
     attFsReverb=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ArcaneEclipseProcessor::idReverbOn,fsReverb);
 
     // v1.1: effect TYPE selection — the small pill under MIX on MOD / DELAY / REVERB
@@ -550,8 +553,28 @@ bool ArcaneEclipseEditor::keyPressed(const juce::KeyPress& k){
     }
     return false;
 }
+bool ArcaneEclipseEditor::delayTapMode() const {
+    return proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDelayTapMode)->load() > .5f;
+}
+void ArcaneEclipseEditor::mouseUp(const juce::MouseEvent& e)
+{
+    if(e.eventComponent!=&fsDelay || e.mods.isPopupMenu() || tunerVisible) return;
+    auto* on=proc.apvts.getParameter(ArcaneEclipseProcessor::idDelayOn);
+    bool held = juce::Time::getMillisecondCounterHiRes()-fsDelayDownMs >= 600.0;
+    if(! delayTapMode() || held){
+        if(held && fsDelayTapped) proc.undoLastTap();       // the hold wasn't a tap
+        on->beginChangeGesture(); on->setValueNotifyingHost(on->getValue()<.5f?1.f:0.f); on->endChangeGesture();
+    }
+    fsDelayTapped=false; repaint();
+}
 void ArcaneEclipseEditor::mouseDown(const juce::MouseEvent& e)
 {
+    if(e.eventComponent==&fsDelay && !e.mods.isPopupMenu() && !tunerVisible){
+        fsDelayDownMs = juce::Time::getMillisecondCounterHiRes();
+        fsDelayTapped = false;
+        if(delayTapMode()){ proc.tapTempo(); fsDelayTapped=true; }   // tap on press = tight timing
+        return;
+    }
     if(tunerVisible){
         auto pos=e.getEventRelativeTo(this).getPosition();
         if(juce::Rectangle<int>(W-46,12,30,30).contains(pos)) setTunerVisible(false);
@@ -880,7 +903,7 @@ void ArcaneEclipseEditor::resized()
     // Pedal footswitches + type hotspots (pedal titles)
     juce::ToggleButton* fs[4]={&fsOD,&fsMod,&fsDelay,&fsReverb};
     for(int i=0;i<4;++i) fs[i]->setBounds(RR(kFootX[i]-kFootR,kFootY-kFootR,kFootX[i]+kFootR,kFootY+kFootR));
-    for(int i=0;i<3;++i) typeBtn[i].setBounds(RR(kFootX[i+1]-52,795,kFootX[i+1]+52,810));   // type pill
+    for(int i=0;i<3;++i) typeBtn[i].setBounds(RR(kFootX[i+1]-60,795,kFootX[i+1]+60,810));   // type pill
 
     // Cab / loader panel
     fieldModel  .setBounds(RR(1291,649,1471,687));
@@ -1060,30 +1083,43 @@ juce::String ArcaneEclipseEditor::typeName(int fx) const
 {
     static const char* mod[3]={"CHORUS","FLANGER","PHASER"};
     static const char* dly[4]={"DIGITAL","ANALOG","TAPE","ECHO"};
-    static const char* rvb[4]={"ROOM","HALL","PLATE","SPRING"};
+    static const char* rvb[6]={"ROOM","HALL","PLATE","SPRING","AMBIENT","SWELL"};
     auto get=[this](const char* id){ return (int) proc.apvts.getRawParameterValue(id)->load(); };
     if(fx==0) return mod[juce::jlimit(0,2,get(ArcaneEclipseProcessor::idModType))];
-    if(fx==1) return dly[juce::jlimit(0,3,get(ArcaneEclipseProcessor::idDelayType))];
-    juce::String s=rvb[juce::jlimit(0,3,get(ArcaneEclipseProcessor::idReverbType))];
+    if(fx==1){
+        juce::String d=dly[juce::jlimit(0,3,get(ArcaneEclipseProcessor::idDelayType))];
+        if(delayTapMode()) d+=juce::String::fromUTF8(" \xc2\xb7 TAP");
+        return d;
+    }
+    juce::String s=rvb[juce::jlimit(0,5,get(ArcaneEclipseProcessor::idReverbType))];
     if(proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idReverbShimmer)->load()>0.5f) s+=" + SHIMMER";
     return s;
 }
 
 void ArcaneEclipseEditor::showTypeMenu(int fx)
 {
-    static const char* names[3][4]={{"Chorus","Flanger","Phaser",nullptr},
-                                    {"Digital","Analog","Tape","Echo"},
-                                    {"Room","Hall","Plate","Spring"}};
+    static const char* names[3][6]={{"Chorus","Flanger","Phaser",nullptr,nullptr,nullptr},
+                                    {"Digital","Analog","Tape","Echo",nullptr,nullptr},
+                                    {"Room","Hall","Plate","Spring","Ambient","Swell (auto volume swell)"}};
     const char* ids[3]={ArcaneEclipseProcessor::idModType,ArcaneEclipseProcessor::idDelayType,
                         ArcaneEclipseProcessor::idReverbType};
-    int cur=(int) proc.apvts.getRawParameterValue(ids[fx])->load();
+    auto val=[this](const char* id){ return proc.apvts.getRawParameterValue(id)->load(); };
+    int cur=(int) val(ids[fx]);
     juce::PopupMenu m;
     m.addSectionHeader(fx==0?"Modulation type":fx==1?"Delay type":"Reverb type");
-    for(int i=0;i<4 && names[fx][i]!=nullptr;++i) m.addItem(i+1,names[fx][i],true,i==cur);
-    if(fx==2){
-        bool sh=proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idReverbShimmer)->load()>0.5f;
+    for(int i=0;i<6 && names[fx][i]!=nullptr;++i) m.addItem(i+1,names[fx][i],true,i==cur);
+    if(fx==1){
+        static const char* divs[4]={"1/4","Dotted 1/8","1/8","1/8 triplet"};
+        int dv=(int) val(ArcaneEclipseProcessor::idDelayTapDiv);
         m.addSeparator();
-        m.addItem(100,"Shimmer (octave-up)",true,sh);
+        m.addItem(200,"Footswitch = Tap tempo (hold = on/off)",true,delayTapMode());
+        juce::PopupMenu dm;
+        for(int i=0;i<4;++i) dm.addItem(210+i,divs[i],true,i==dv);
+        m.addSubMenu("Tap division",dm);
+    }
+    if(fx==2){
+        m.addSeparator();
+        m.addItem(100,"Shimmer (octave-up)",true,val(ArcaneEclipseProcessor::idReverbShimmer)>0.5f);
     }
     auto setParam=[this](const char* id,float v){
         if(auto* p=proc.apvts.getParameter(id)){
@@ -1091,13 +1127,11 @@ void ArcaneEclipseEditor::showTypeMenu(int fx)
         }
     };
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&typeBtn[fx]),
-        [this,fx,setParam,id=ids[fx]](int r){
-            if(r>=1 && r<=4) setParam(id,(float)(r-1));
-            else if(r==100){
-                bool sh=proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idReverbShimmer)->load()>0.5f;
-                setParam(ArcaneEclipseProcessor::idReverbShimmer,sh?0.f:1.f);
-            }
-            juce::ignoreUnused(fx);
+        [this,setParam,val,id=ids[fx]](int r){
+            if(r>=1 && r<=6) setParam(id,(float)(r-1));
+            else if(r==100) setParam(ArcaneEclipseProcessor::idReverbShimmer,val(ArcaneEclipseProcessor::idReverbShimmer)>.5f?0.f:1.f);
+            else if(r==200) setParam(ArcaneEclipseProcessor::idDelayTapMode,delayTapMode()?0.f:1.f);
+            else if(r>=210 && r<=213){ setParam(ArcaneEclipseProcessor::idDelayTapDiv,(float)(r-210)); proc.applyTapDivision(); }
             repaint();
         });
 }
@@ -1107,13 +1141,25 @@ void ArcaneEclipseEditor::paintPedalsLive(juce::Graphics& g)
     bool on[4]={ stompOD.getToggleState(), stompMod.getToggleState(),
                  stompDelay.getToggleState(), stompReverb.getToggleState() };
     for(int i=0;i<4;++i){
-        if(on[i]) ledGlow(g,kFootX[i],kLedY,5.f);
+        if(i==2 && delayTapMode()){
+            // tap mode: LED flashes on every repeat (at the TIME setting); dim when the delay is off
+            float tms=proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDelayTime)->load();
+            double t0=proc.lastTapMs.load(), now=juce::Time::getMillisecondCounterHiRes();
+            double ph=std::fmod(now-(t0>0?t0:0.0),(double)juce::jmax(20.f,tms));
+            bool flash = ph < juce::jmin(120.0, tms*0.45);
+            if(flash){
+                if(on[i]) ledGlow(g,kFootX[i],kLedY,5.f);
+                else { g.setColour(kPurple.withAlpha(0.45f)); g.fillEllipse(RF(kFootX[i]-4.5f,kLedY-4.5f,kFootX[i]+4.5f,kLedY+4.5f)); }
+            } else if(on[i]) { g.setColour(kPurple.withAlpha(0.35f)); g.fillEllipse(RF(kFootX[i]-4.f,kLedY-4.f,kFootX[i]+4.f,kLedY+4.f)); }
+        }
+        else if(on[i]) ledGlow(g,kFootX[i],kLedY,5.f);
         if(i>0){  // effect-type pill (click = type menu), between the MIX label and the LED
-            auto r=RF(kFootX[i]-52,795,kFootX[i]+52,810);
+            auto r=RF(kFootX[i]-60,795,kFootX[i]+60,810);
             g.setColour(juce::Colour(0xcc0c0912)); g.fillRoundedRectangle(r,r.getHeight()*0.5f);
             g.setColour(kPurple.withAlpha(0.55f)); g.drawRoundedRectangle(r.reduced(0.5f),r.getHeight()*0.5f,1.f);
             g.setFont(juce::Font(SY(10.f)).boldened()); g.setColour(juce::Colour(0xffe6d2ff));
-            g.drawText(typeName(i-1),r.withTrimmedRight(SX(12.f)),juce::Justification::centred,false);
+            g.drawFittedText(typeName(i-1),r.withTrimmedRight(SX(13.f)).withTrimmedLeft(SX(4.f)).toNearestInt(),
+                             juce::Justification::centred,1,0.75f);
             juce::Path c; float ax=r.getRight()-SX(11.f), ay=r.getCentreY();
             c.addTriangle(ax-2.6f,ay-1.4f,ax+2.6f,ay-1.4f,ax,ay+1.8f);
             g.setColour(kPurple); g.fillPath(c);

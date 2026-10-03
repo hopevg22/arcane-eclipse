@@ -12,11 +12,17 @@
                     sweet-spot voice, kept byte-for-byte.
       1 = FLANGER — a short modulated delay (~1..4.5 ms) with feedback for the
                     classic jet-sweep comb.
-      2 = PHASER  — 8 cascaded modulated all-pass stages with feedback, log
-                    sweep across the guitar mids (300 Hz..2.2 kHz).
+      2 = PHASER  — 6 cascaded modulated first-order all-pass stages with
+                    feedback, log sweep across the guitar range (~200 Hz..3.5 kHz).
 
     Shared knobs: RATE, DEPTH, MIX. Feedback for flanger/phaser is set
     internally (no extra knob) to musical fixed values.
+
+    v1.1.1 phaser fix: the all-pass stages had a flipped sign, which mirrored
+    the sweep to ~22-24 kHz (inaudible). Now a standard first-order all-pass;
+    phaser/flanger also get their own exponential RATE range (~0.15..6 Hz)
+    instead of the chorus' slow remap, and the phaser MIX reaches full-depth
+    notches (equal dry/all-pass) at 100%.
 */
 class ModulationFX
 {
@@ -47,6 +53,9 @@ public:
         // Rate remap kept from v1.0 so the chorus sweet spot (old dial 0.2)
         // sits at the new default dial 1.5; shared across all three modes.
         lfoRate = juce::jlimit (0.01f, 8.0f, rate * 0.133f);
+        // Flanger/phaser: exponential map of the RATE knob (0.1..4) -> ~0.15..6 Hz
+        float norm = juce::jlimit (0.f, 1.f, (rate - 0.1f) / 3.9f);
+        lfoRateFx = 0.15f * std::pow (40.0f, norm);
         depth01 = juce::jlimit (0.f, 1.f, depth);
         depthMs = 1.0f + depth01 * 9.0f;            // chorus sweep +/- 1..10 ms
         wetMix  = juce::jlimit (0.f, 1.f, mix);
@@ -65,7 +74,7 @@ public:
 
 private:
     static constexpr int kVoices = 3;
-    static constexpr int kStages = 8;
+    static constexpr int kStages = 6;
 
     // ---- CHORUS (unchanged v1.0 voice) ----
     void processChorus (juce::AudioBuffer<float>& buffer)
@@ -109,14 +118,15 @@ private:
     {
         const int numSamples  = buffer.getNumSamples();
         const int numChannels = juce::jmin (buffer.getNumChannels(), 2);
-        const double inc = lfoRate * juce::MathConstants<double>::twoPi / sr;
         const float baseMs = 1.0f;
         const float excMs  = 3.5f * depth01;        // up to +3.5 ms
+        const double incFx = lfoRateFx * juce::MathConstants<double>::twoPi / sr;
         const float fb     = 0.6f;
+        const float makeup = 1.0f / std::sqrt ((1.0f - wetMix) * (1.0f - wetMix) + wetMix * wetMix);  // keep level steady
 
         for (int n = 0; n < numSamples; ++n)
         {
-            phase += inc;
+            phase += incFx;
             if (phase > juce::MathConstants<double>::twoPi) phase -= juce::MathConstants<double>::twoPi;
 
             for (int ch = 0; ch < numChannels; ++ch)
@@ -129,7 +139,7 @@ private:
                 float  dl    = readInterp (ch, delMs * 0.001f * (float) sr);
 
                 buf[ch][(size_t) widx[ch]] = dry + fb * dl;   // feedback into the line
-                data[n] = dry + wetMix * (dl - dry);
+                data[n] = makeup * (dry + wetMix * (dl - dry));
             }
             for (int ch = 0; ch < numChannels; ++ch)
                 if (++widx[ch] >= (int) buf[ch].size()) widx[ch] = 0;
@@ -141,10 +151,14 @@ private:
     {
         const int numSamples  = buffer.getNumSamples();
         const int numChannels = juce::jmin (buffer.getNumChannels(), 2);
-        const double inc = lfoRate * juce::MathConstants<double>::twoPi / sr;
-        const float fb = 0.6f;
-        const float lo = std::log (300.0f), hi = std::log (2200.0f);
+        const double inc = lfoRateFx * juce::MathConstants<double>::twoPi / sr;
+        const float fb = 0.5f;
+        const float lo = std::log (200.0f), hi = std::log (3500.0f);
         const float ctr = (lo + hi) * 0.5f, halfR = (hi - lo) * 0.5f;
+        // MIX: 4th-root curve so the default (0.7) already gives deep notches; 100% = equal mix.
+        // Make-up gain keeps the perceived level steady when the phaser is engaged.
+        const float wetW = 0.5f * std::pow (wetMix, 0.25f), dryW = 1.0f - wetW;
+        const float makeup = 1.0f + 0.6f * (2.0f * wetW);
 
         for (int n = 0; n < numSamples; ++n)
         {
@@ -156,19 +170,19 @@ private:
                 float* data = buffer.getWritePointer (ch);
                 float  dry  = data[n];
                 double chOff = (ch == 1) ? juce::MathConstants<double>::halfPi : 0.0;
-                float  sweep = std::exp (ctr + halfR * depth01 * (float) std::sin (phase + chOff));
+                float  sweep = std::exp (ctr + halfR * (0.25f + 0.75f * depth01) * (float) std::sin (phase + chOff));
                 float  tw = std::tan (juce::MathConstants<float>::pi * sweep / (float) sr);
-                float  g  = (tw - 1.0f) / (tw + 1.0f);
+                float  a  = (tw - 1.0f) / (tw + 1.0f);              // first-order all-pass coefficient
 
                 float s = dry + fb * fbState[ch];
                 for (int k = 0; k < kStages; ++k)
                 {
-                    float v = -g * s + apState[ch][k];
-                    apState[ch][k] = s + g * v;
-                    s = v;
+                    float y = a * s + apState[ch][k];               // y = a*x + z
+                    apState[ch][k] = s - a * y;                     // z = x - a*y
+                    s = y;
                 }
-                fbState[ch] = s;
-                data[n] = dry + wetMix * (s - dry);
+                fbState[ch] = juce::jlimit (-4.0f, 4.0f, s);
+                data[n] = makeup * (dryW * dry + wetW * s);
             }
         }
     }
@@ -186,7 +200,7 @@ private:
     }
 
     double sr = 48000.0, phase = 0.0;
-    float  lfoRate = 1.0f, depthMs = 5.0f, depth01 = 0.5f, wetMix = 0.5f;
+    float  lfoRate = 1.0f, lfoRateFx = 0.6f, depthMs = 5.0f, depth01 = 0.5f, wetMix = 0.5f;
     int    fxType = 0;
     std::vector<float> buf[2];
     int    widx[2] = { 0, 0 };

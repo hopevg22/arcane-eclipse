@@ -77,13 +77,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idDelayFeedback, "Feedback",  Range(0.f,.97f,.01f),.35f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idDelayMix,      "Delay Mix", Range(0.f,1.f,.01f),.35f));
     p.push_back(std::make_unique<juce::AudioParameterInt>  (idDelayType,     "Delay Type",0, 3, 0));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idDelayTapMode,  "Delay Tap Mode", false));
+    p.push_back(std::make_unique<juce::AudioParameterInt>  (idDelayTapDiv,   "Delay Tap Division", 0, 3, 0));
 
     p.push_back(std::make_unique<juce::AudioParameterBool> (idReverbOn,    "Reverb On",  false));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbHighCut,"Reverb High Cut",Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbDecay, "Reverb Decay",Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbSize,  "Reverb Size", Range(0.f,1.f,.01f),.5f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idReverbMix,   "Reverb Mix",  Range(0.f,1.f,.01f),.5f));
-    p.push_back(std::make_unique<juce::AudioParameterInt>  (idReverbType,  "Reverb Type", 0, 3, 0));
+    p.push_back(std::make_unique<juce::AudioParameterInt>  (idReverbType,  "Reverb Type", 0, 5, 0));   // + ambient, swell
     p.push_back(std::make_unique<juce::AudioParameterBool> (idReverbShimmer, "Shimmer", false));
 
     // Dual Amp/IR (v1.1): blend amp 1 (0) <-> amp 2 (1); shown as "70 / 30"
@@ -198,7 +200,12 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 const int pi = ccMap[idx].load();
                 if (pi >= 0 && pi < (int) learnParamPtrs.size() && learnParamPtrs[pi] != nullptr) {
                     if (pi < (int) learnIsToggle.size() && learnIsToggle[pi]) {
-                        if (prevCCVal[idx] < 64 && val >= 64) {
+                        if (prevCCVal[idx] < 64 && val >= 64
+                            && learnParamIDs[(size_t) pi] == idDelayOn
+                            && apvts.getRawParameterValue(idDelayTapMode)->load() > .5f) {
+                            tapTempo();                          // tap mode: footswitch = TAP
+                        }
+                        else if (prevCCVal[idx] < 64 && val >= 64) {
                             float cur = learnParamPtrs[pi]->getValue();
                             learnParamPtrs[pi]->setValueNotifyingHost(cur < 0.5f ? 1.0f : 0.0f);
                         }
@@ -633,6 +640,48 @@ int  ArcaneEclipseProcessor::ccForAction(int a) const {
 int  ArcaneEclipseProcessor::actionLearningNow() const { return actionLearn.load(); }
 int  ArcaneEclipseProcessor::takePendingAction() { return actionPending.exchange(-1); }
 void ArcaneEclipseProcessor::cancelLearn() { learnTarget.store(-1); actionLearn.store(-1); }
+
+// ── Tap tempo ────────────────────────────────────────────────────────────────
+void ArcaneEclipseProcessor::tapTempo()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    float beat = 0.f;
+    timeBeforeTap = apvts.getRawParameterValue(idDelayTime)->load();
+    beatBeforeTap = tapBeatMs.load();
+    {
+        const juce::SpinLock::ScopedLockType sl(tapLock);
+        if (tapCount > 0 && now - tapTimes[(tapCount - 1) % 4] > 2500.0) tapCount = 0;   // >2.5 s gap = start over
+        tapTimes[tapCount % 4] = now; ++tapCount;
+        if (tapCount < 2) { lastTapMs.store(now); return; }
+        int k = juce::jmin(tapCount, 4);                      // average up to the last 3 intervals
+        double first = tapTimes[(tapCount - k) % 4];
+        beat = (float) ((now - first) / (double) (k - 1));
+    }
+    lastTapMs.store(now);
+    tapBeatMs.store(beat);
+    applyTapDivision();
+}
+
+void ArcaneEclipseProcessor::applyTapDivision()
+{
+    float beat = tapBeatMs.load();
+    if (beat <= 0.f) return;
+    static const float divMul[4] = { 1.0f, 0.75f, 0.5f, 1.0f / 3.0f };   // 1/4, dotted 1/8, 1/8, 1/8 triplet
+    int div = juce::jlimit(0, 3, (int) apvts.getRawParameterValue(idDelayTapDiv)->load());
+    float ms = juce::jlimit(20.f, 2000.f, beat * divMul[div]);
+    if (auto* t = apvts.getParameter(idDelayTime)) t->setValueNotifyingHost(t->convertTo0to1(ms));
+}
+
+void ArcaneEclipseProcessor::undoLastTap()
+{
+    {
+        const juce::SpinLock::ScopedLockType sl(tapLock);
+        if (tapCount > 0) --tapCount;
+    }
+    tapBeatMs.store(beatBeforeTap);
+    if (timeBeforeTap > 0.f)
+        if (auto* t = apvts.getParameter(idDelayTime)) t->setValueNotifyingHost(t->convertTo0to1(timeBeforeTap));
+}
 
 // ── Tuner pitch detection (YIN) ───────────────────────────────────────────────
 // YIN difference + cumulative-mean-normalised difference with an absolute

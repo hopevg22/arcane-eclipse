@@ -97,6 +97,7 @@ public:
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
     bool keyPressed(const juce::KeyPress&) override;
     void resized() override;
 
@@ -196,6 +197,9 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attDual;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attDualMix;
     std::vector<juce::Component*> hiddenByTuner;
+    double fsDelayDownMs = 0.0;                      // v1.1.1 tap/hold timing on the DELAY footswitch
+    bool   fsDelayTapped = false;
+    bool   delayTapMode() const;
 
     // Scene bar (4 slots + 2 bank buttons)
     juce::TextButton sceneBtn[4];
