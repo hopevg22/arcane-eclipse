@@ -10,6 +10,7 @@
 #include "Modulation.h"
 #include "RoomReverb.h"
 #include "StandardDelay.h"
+#include "Doubler.h"
 
 class ArcaneEclipseProcessor : public juce::AudioProcessor
 {
@@ -63,6 +64,13 @@ public:
     juce::String getODModelName() const { return odSlot.namName; }
     juce::String getODModelPath() const { return odSlot.namPath; }
     static juce::File aecapCacheDir();
+
+    // Global bypass (v1.1.1): output = raw input, 25 ms crossfade. Not a saved
+    // parameter on purpose, so patches never load "bypassed".
+    void setGlobalBypass(bool b) { globalBypass.store(b); }
+    bool isGlobalBypassed() const { return globalBypass.load(); }
+    // Dual: running loudness of each amp (before its trim), for MATCH
+    float getAmpLevel(int i) const { return ampMs[juce::jlimit(0,1,i)].load(); }
 
     // MIDI learn
     void midiLearnStart(const juce::String& paramID);
@@ -145,6 +153,11 @@ public:
     // Dual Amp/IR (v1.1)
     static constexpr auto idDualOn  = "dualOn";
     static constexpr auto idDualMix = "dualMix";      // 0 = amp 1 only, 1 = amp 2 only
+    static constexpr auto idAmp1Trim = "amp1Trim";    // dual: per-amp level trim (dB)
+    static constexpr auto idAmp2Trim = "amp2Trim";
+    // Stereo doubler (v1.1.1)
+    static constexpr auto idDoubler      = "doubler";
+    static constexpr auto idDoublerWidth = "doublerWidth";
 
 private:
     // One amp = NAM model (+ its own 48 kHz resamplers) + cabinet IR.
@@ -158,6 +171,11 @@ private:
     };
     AmpSlot amps[kNumAmpSlots];
     AmpSlot odSlot;                                          // overdrive pedal capture (no IR)
+    StereoDoubler doubler;
+    juce::AudioBuffer<float> dryBuf;                         // raw input for global bypass
+    std::atomic<bool> globalBypass { false };
+    juce::SmoothedValue<float> bypassSm { 0.f }, trimSm[2];
+    std::atomic<float> ampMs[2] { {0.f}, {0.f} };
     std::vector<float> odMono, odOut;
     float odTiltZ[2] = { 0.f, 0.f };
     void makeMono(const juce::AudioBuffer<float>& b, int numSamples, float* dst) const;

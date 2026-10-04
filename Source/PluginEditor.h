@@ -120,6 +120,14 @@ private:
     juce::String typeName(int fx) const;
     void showFieldMenu(bool ir);               // MODEL / IR field dropdown
     void showODMenu();                         // overdrive capture pill
+    void showStereoMenu();                     // footer: mono / stereo / doubler
+    // A/B compare (v1.1.1)
+    SceneData snapshotNow();
+    void applySnapshot(const SceneData& s);
+    void abToggle(); void showABMenu(); void abReset();
+    SceneData abSnap[2]; bool abHas[2] = { false, false }; int abSide = 0;
+    void matchAmpLevels();
+    double matchFlashMs = 0.0; juce::String matchMsg;
 
     void saveScene(int slot);
     void loadScene(int slot);
@@ -196,6 +204,10 @@ private:
     // v1.1 Dual Amp/IR: [1] --MIX-- [2] row under the DUAL AMP/IR button
     juce::TextButton ampSelBtn[2];
     juce::TextButton odBtn;                          // overdrive pedal capture pill
+    juce::TextButton powerBtn, abBtn, matchBtn;      // header power (bypass), [ ] (A/B), dual MATCH
+    juce::Slider trimSl[2] { juce::Slider(juce::Slider::LinearVertical, juce::Slider::NoTextBox),
+                             juce::Slider(juce::Slider::LinearVertical, juce::Slider::NoTextBox) };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attTrim[2];
     // tuner animation state (v1.1.1 redesign)
     float tunerDispCents = 0.f, tunerStrobe = 0.f, tunerSignal = 0.f;
     double tunerLastTick = 0.0;

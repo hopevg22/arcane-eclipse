@@ -90,6 +90,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
 
     // Dual Amp/IR (v1.1): blend amp 1 (0) <-> amp 2 (1); shown as "70 / 30"
     p.push_back(std::make_unique<juce::AudioParameterBool> (idDualOn, "Dual Amp/IR", false));
+    auto dbTxt = juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int){
+        return (v > 0.f ? "+" : "") + juce::String(v, 1) + " dB"; });
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmp1Trim, "Amp 1 Level", Range(-24.f,24.f,.1f), 0.f, dbTxt));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmp2Trim, "Amp 2 Level", Range(-24.f,24.f,.1f), 0.f, dbTxt));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idDoubler, "Doubler", false));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(idDoublerWidth, "Doubler Width", Range(0.f,1.f,.01f), .6f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int){ return juce::String(juce::roundToInt(v*100)) + "%"; })));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idDualMix, "Dual Mix", Range(0.f,1.f,.01f), .5f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int){
             int b = juce::roundToInt(v * 100.f); return juce::String(100 - b) + " / " + juce::String(b); })));
@@ -114,6 +121,13 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         a.rsIn.reset(); a.rsOut.reset();
     }
     for (auto& b : dualBuf) b.setSize(2, samplesPerBlock + 32, false, true, false);
+    dryBuf.setSize(2, samplesPerBlock + 32, false, true, false);
+    doubler.prepare(sampleRate, samplesPerBlock);
+    bypassSm.reset(sampleRate, 0.025); bypassSm.setCurrentAndTargetValue(globalBypass.load() ? 1.f : 0.f);
+    for (int i = 0; i < 2; ++i) {
+        trimSm[i].reset(sampleRate, 0.03);
+        trimSm[i].setCurrentAndTargetValue(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(i ? idAmp2Trim : idAmp1Trim)->load()));
+    }
     dualMixSm.reset(sampleRate, 0.03);
     dualMixSm.setCurrentAndTargetValue(apvts.getRawParameterValue(idDualMix)->load());
     monoBuf       .assign((size_t)(samplesPerBlock + 32),     0.f);
@@ -225,6 +239,10 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             prevCCVal[idx] = val;
         }
     }
+
+    // keep the raw input for the global bypass crossfade
+    if (dryBuf.getNumSamples() < numSamples) dryBuf.setSize(2, numSamples, false, false, true);
+    for (int ch = 0; ch < 2; ++ch) dryBuf.copyFrom(ch, 0, buffer, juce::jmin(ch, numCh - 1), 0, numSamples);
 
     // 0. TUNER — feed the pitch detector from the dry input (only when open)
     if (tunerActive.load() && ! tunerBuf.empty()) {
@@ -341,12 +359,24 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 a.conv.process(juce::dsp::ProcessContextReplacing<float>(blk));
             }
         }
+        // running loudness of each amp before its trim (for MATCH); only while playing
+        for (int s = 0; s < kNumAmpSlots; ++s) {
+            float ms = 0.f; auto* d = dualBuf[s].getReadPointer(0);
+            for (int n = 0; n < numSamples; ++n) ms += d[n] * d[n];
+            ms /= (float) juce::jmax(1, numSamples);
+            if (ms > 1.0e-7f) {                                   // > -70 dBFS: someone is playing
+                float a = std::exp(-(float) numSamples / (float) (2.0 * currentSampleRate));   // ~2 s
+                ampMs[s].store(a * ampMs[s].load() + (1.f - a) * ms);
+            }
+        }
+        trimSm[0].setTargetValue(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idAmp1Trim)->load()));
+        trimSm[1].setTargetValue(juce::Decibels::decibelsToGain(apvts.getRawParameterValue(idAmp2Trim)->load()));
         // Linear crossfade: keeps the level steady for two amps fed the same guitar
         dualMixSm.setTargetValue(apvts.getRawParameterValue(idDualMix)->load());
         auto* a0L = dualBuf[0].getReadPointer(0); auto* a0R = dualBuf[0].getReadPointer(1);
         auto* a1L = dualBuf[1].getReadPointer(0); auto* a1R = dualBuf[1].getReadPointer(1);
         for (int n = 0; n < numSamples; ++n) {
-            float m = dualMixSm.getNextValue(), g0 = 1.f - m, g1 = m;
+            float m = dualMixSm.getNextValue(), g0 = (1.f - m) * trimSm[0].getNextValue(), g1 = m * trimSm[1].getNextValue();
             buffer.getWritePointer(0)[n] = g0 * a0L[n] + g1 * a1L[n];
             if (numCh > 1) buffer.getWritePointer(1)[n] = g0 * a0R[n] + g1 * a1R[n];
         }
@@ -385,6 +415,13 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     if (! dual && amps[0].irLoaded) {
         juce::dsp::AudioBlock<float> block(buffer);
         amps[0].conv.process(juce::dsp::ProcessContextReplacing<float>(block));
+    }
+
+    // 9b. STEREO DOUBLER — double-tracked width (needs stereo mode + 2 channels)
+    if (numCh > 1 && apvts.getRawParameterValue(idDoubler)->load() > .5f
+                  && apvts.getRawParameterValue(idStereoMode)->load() > .5f) {
+        doubler.setWidth(apvts.getRawParameterValue(idDoublerWidth)->load());
+        doubler.processBlock(buffer);
     }
 
     // 10. MODULATION — post-cab chorus/flanger (keep mix low)
@@ -454,6 +491,17 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             if      (v >  1.0f) v =  1.0f + std::tanh(v - 1.0f);
             else if (v < -1.0f) v = -1.0f - std::tanh(-v - 1.0f);
             d[n] = v;
+        }
+    }
+    // 15. GLOBAL BYPASS — crossfade to the raw input (A/B against the dry guitar)
+    bypassSm.setTargetValue(globalBypass.load() ? 1.f : 0.f);
+    if (bypassSm.isSmoothing() || bypassSm.getTargetValue() > 0.5f) {
+        for (int n = 0; n < numSamples; ++n) {
+            const float b = bypassSm.getNextValue();
+            for (int ch = 0; ch < numCh; ++ch) {
+                float* d = buffer.getWritePointer(ch);
+                d[n] = (1.f - b) * d[n] + b * dryBuf.getSample(juce::jmin(ch, 1), n);
+            }
         }
     }
     outLevel.store(buffer.getMagnitude(0, numSamples));   // output meter

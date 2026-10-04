@@ -62,6 +62,7 @@ target_sources(ArcaneEclipse PRIVATE
     Source/Modulation.h
     Source/RoomReverb.h
     Source/StandardDelay.h
+    Source/Doubler.h
     Source/AecapLoader.h
 )
 
