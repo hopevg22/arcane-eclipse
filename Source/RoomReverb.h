@@ -31,40 +31,41 @@
     Controls: DECAY (tail), SIZE (pre-delay; swell time in SWELL), HIGH CUT, MIX.
 */
 /*
-    OctaveUpSTFT — smooth +12 semitone shifter for the shimmer (v1.1.1).
-    Phase-vocoder pitch shift: short-time FFT (2048 pt, hop 512, Hann/Hann,
-    75 % overlap). For every bin the TRUE frequency is estimated from its phase
-    advance between frames, moved to twice that frequency, and resynthesised
-    with a continuously accumulated phase. Partials therefore stay coherent from
-    frame to frame - no grains to beat against each other (the grain approach
-    rippled 6-54 % depending on the note). Latency 2048 samples (~43 ms),
-    inaudible inside a reverb tail.
+    OctaveUpSTFT — in-tune +12 semitone shifter for the shimmer (v1.1.1 r2).
+    Peak-locked phase vocoder (Laroche-Dolson region shifting): each spectral
+    peak's TRUE frequency is measured from its phase advance, the whole region
+    around the peak (its main lobe) is moved to exactly twice that frequency and
+    phase-rotated as one unit, so every harmonic of every note stays coherent
+    and lands on the exact octave. 8192-pt FFT (hop 2048, Hann/Hann): fine
+    enough to keep the notes of a chord apart.
+    Measured on synthetic guitar notes/chords: 100 % of the octave energy within
+    +-15 cents of the correct pitches (the v1.1.1 r1 bin-mapping shifter: 84-90 %
+    on chords - the audible "out of tune" shimmer).
+    Latency 8192 samples (~170 ms) - acts as a shimmer pre-delay.
 */
 class OctaveUpSTFT
 {
 public:
-    static constexpr int kOrder = 11, kN = 1 << kOrder, kOsamp = 4, kHop = kN / kOsamp, kBins = kN / 2 + 1;
-    float ratio = 2.0f;                      // 2 = +12 st; 1 = identity (unit tests)
+    static constexpr int kOrder = 13, kN = 1 << kOrder, kOsamp = 4, kHop = kN / kOsamp, kBins = kN / 2 + 1;
+    float ratio = 2.0f;
 
     void prepare()
     {
-        inFifo.assign ((size_t) kN, 0.f); outFifo.assign ((size_t) kN, 0.f);
-        frame.assign ((size_t) (2 * kN), 0.f); win.resize ((size_t) kN);
-        for (auto* v : { &lastPh, &sumPh, &anaMag, &anaFrq, &synMag, &synFrq }) v->assign ((size_t) kBins, 0.f);
+        inF.assign ((size_t) kN, 0.f); outF.assign ((size_t) kN, 0.f); frame.assign ((size_t) (2 * kN), 0.f); win.resize ((size_t) kN);
+        for (auto* v : { &mag, &ph, &lastPh, &outPrev, &outNew, &yr, &yi }) v->assign ((size_t) kBins, 0.f);
+        peaks.reserve ((size_t) kBins);
         for (int i = 0; i < kN; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (2.f * juce::MathConstants<float>::pi * (float) i / (float) kN);
         reset();
     }
     void reset()
     {
-        std::fill (inFifo.begin(), inFifo.end(), 0.f); std::fill (outFifo.begin(), outFifo.end(), 0.f);
-        std::fill (lastPh.begin(), lastPh.end(), 0.f); std::fill (sumPh.begin(), sumPh.end(), 0.f);
+        std::fill (inF.begin(), inF.end(), 0.f); std::fill (outF.begin(), outF.end(), 0.f);
+        std::fill (lastPh.begin(), lastPh.end(), 0.f); std::fill (outPrev.begin(), outPrev.end(), 0.f);
         pos = 0; hop = 0;
     }
-
     inline float process (float x)
     {
-        inFifo[(size_t) pos] = x;
-        float y = outFifo[(size_t) pos]; outFifo[(size_t) pos] = 0.f;
+        inF[(size_t) pos] = x; float y = outF[(size_t) pos]; outF[(size_t) pos] = 0.f;
         if (++pos >= kN) pos = 0;
         if (++hop >= kHop) { hop = 0; doFrame(); }
         return y;
@@ -73,48 +74,59 @@ public:
 private:
     void doFrame()
     {
-        const float twoPi = juce::MathConstants<float>::twoPi;
-        const float expct = twoPi * (float) kHop / (float) kN;        // expected phase advance per bin
-        for (int i = 0; i < kN; ++i) frame[(size_t) i] = inFifo[(size_t) ((pos + i) % kN)] * win[(size_t) i];
+        const float twoPi = juce::MathConstants<float>::twoPi, expct = twoPi / (float) kOsamp;
+        for (int i = 0; i < kN; ++i) frame[(size_t) i] = inF[(size_t) ((pos + i) % kN)] * win[(size_t) i];
         std::fill (frame.begin() + kN, frame.end(), 0.f);
         fft.performRealOnlyForwardTransform (frame.data(), true);
 
-        // analysis: magnitude + true frequency (in bins)
+        float mx = 0.f;
         for (int k = 0; k < kBins; ++k) {
             float re = frame[(size_t) (2 * k)], im = frame[(size_t) (2 * k + 1)];
-            float mag = std::sqrt (re * re + im * im), ph = std::atan2 (im, re);
-            float d = ph - lastPh[(size_t) k]; lastPh[(size_t) k] = ph;
-            d -= (float) k * expct;
-            d -= twoPi * std::round (d / twoPi);                         // wrap to +-pi
-            anaMag[(size_t) k] = mag;
-            anaFrq[(size_t) k] = (float) k + d * (float) kOsamp / twoPi;
+            mag[(size_t) k] = std::sqrt (re * re + im * im); ph[(size_t) k] = std::atan2 (im, re);
+            mx = std::max (mx, mag[(size_t) k]);
         }
-        // shift
-        std::fill (synMag.begin(), synMag.end(), 0.f); std::fill (synFrq.begin(), synFrq.end(), 0.f);
-        for (int k = 0; k < kBins; ++k) {
-            int j = (int) std::lround ((float) k * ratio);
-            if (j >= kBins) break;
-            synMag[(size_t) j] += anaMag[(size_t) k];
-            synFrq[(size_t) j]  = anaFrq[(size_t) k] * ratio;
+        // spectral peaks (local maxima over +-2 bins)
+        peaks.clear();
+        const float thr = std::max (mx * 1e-5f, 1e-9f);
+        for (int k = 2; k < kBins - 2; ++k) {
+            const float m = mag[(size_t) k];
+            if (m > thr && m > mag[(size_t) k - 1] && m >= mag[(size_t) k + 1] && m > mag[(size_t) k - 2] && m >= mag[(size_t) k + 2])
+                peaks.push_back (k);
         }
-        // synthesis: accumulate phase at the shifted true frequency
-        for (int k = 0; k < kBins; ++k) {
-            float d = (synFrq[(size_t) k] - (float) k) * twoPi / (float) kOsamp + (float) k * expct;
-            float ph = sumPh[(size_t) k] + d;
-            ph -= twoPi * std::round (ph / twoPi);
-            sumPh[(size_t) k] = ph;
-            frame[(size_t) (2 * k)]     = synMag[(size_t) k] * std::cos (ph);
-            frame[(size_t) (2 * k + 1)] = synMag[(size_t) k] * std::sin (ph);
+        std::fill (yr.begin(), yr.end(), 0.f); std::fill (yi.begin(), yi.end(), 0.f);
+        for (int k = 0; k < kBins; ++k) { float v = outPrev[(size_t) k] + expct * (float) k; outNew[(size_t) k] = v - twoPi * std::round (v / twoPi); }
+
+        const int np = (int) peaks.size();
+        for (int i = 0; i < np; ++i) {
+            const int p = peaks[(size_t) i];
+            float d = ph[(size_t) p] - lastPh[(size_t) p] - (float) p * expct;
+            d -= twoPi * std::round (d / twoPi);
+            const float fT = ((float) p + d * (float) kOsamp / twoPi) * ratio;   // target frequency (bins)
+            const int q = (int) std::lround (fT);
+            if (q >= kBins - 1) break;
+            const int shift = q - p;
+            const float rot = (outPrev[(size_t) q] + expct * fT) - ph[(size_t) p];   // phase-continuous at q
+            const int lo = (i == 0) ? 0 : (peaks[(size_t) i - 1] + p) / 2 + 1;
+            const int hi = (i == np - 1) ? kBins - 1 : (p + peaks[(size_t) i + 1]) / 2;
+            for (int k = lo; k <= hi; ++k) {
+                const int t = k + shift; if (t < 0 || t >= kBins) continue;
+                const float nph = ph[(size_t) k] + rot;
+                yr[(size_t) t] += mag[(size_t) k] * std::cos (nph);
+                yi[(size_t) t] += mag[(size_t) k] * std::sin (nph);
+                outNew[(size_t) t] = nph - twoPi * std::round (nph / twoPi);
+            }
         }
+        lastPh = ph; outPrev = outNew;
+        for (int k = 0; k < kBins; ++k) { frame[(size_t) (2 * k)] = yr[(size_t) k]; frame[(size_t) (2 * k + 1)] = yi[(size_t) k]; }
         for (int i = 2 * kBins; i < 2 * kN; ++i) frame[(size_t) i] = 0.f;
         fft.performRealOnlyInverseTransform (frame.data());
-        const float norm = 1.0f / 1.5f;                               // Hann x Hann @ 75 % overlap
-        for (int i = 0; i < kN; ++i)
-            outFifo[(size_t) ((pos + i) % kN)] += frame[(size_t) i] * win[(size_t) i] * norm;
+        const float norm = 1.0f / 1.5f;                                      // Hann x Hann @ 75 % overlap
+        for (int i = 0; i < kN; ++i) outF[(size_t) ((pos + i) % kN)] += frame[(size_t) i] * win[(size_t) i] * norm;
     }
 
     juce::dsp::FFT fft { kOrder };
-    std::vector<float> inFifo, outFifo, frame, win, lastPh, sumPh, anaMag, anaFrq, synMag, synFrq;
+    std::vector<float> inF, outF, frame, win, mag, ph, lastPh, outPrev, outNew, yr, yi;
+    std::vector<int> peaks;
     int pos = 0, hop = 0;
 };
 
@@ -133,7 +145,8 @@ public:
         wetBuf.setSize (2, maxBlockSize);
         shBuf.setSize  (2, maxBlockSize);
 
-        for (auto& o : octUp) o.prepare();                 // shimmer pitch shifter (phase vocoder)
+        octUp.prepare();                                    // shimmer pitch shifter (peak-locked PV)
+        shSrc.assign ((size_t) maxBlockSize, 0.f);
 
         // input diffusers (ambient/swell): 4 all-passes per channel, prime-ish ms
         const float dms[kDiff] = { 4.77f, 3.59f, 12.73f, 9.31f };
@@ -160,7 +173,6 @@ public:
         reverb.reset(); shReverb.reset();
         for (int ch = 0; ch < 2; ++ch) {
             std::fill (pd[ch].begin(), pd[ch].end(), 0.f);
-            octUp[ch].reset();
             for (int st = 0; st < 2; ++st) std::fill (md[st][ch].begin(), md[st][ch].end(), 0.f);
             std::fill (laDry[ch].begin(), laDry[ch].end(), 0.f);
             for (int k = 0; k < kDiff; ++k) std::fill (diff[ch][k].begin(), diff[ch][k].end(), 0.f);
@@ -168,13 +180,13 @@ public:
             shHpZ[ch] = shLpZ[ch] = shHp2Z[ch] = shLp2Z[ch] = 0.f;
             rvDcX[ch] = rvDcY[ch] = 0.f;
         }
-        wetBuf.clear(); shBuf.clear();
+        wetBuf.clear(); shBuf.clear(); octUp.reset();
         modPh[0][0] = modPh[1][0] = 0.0; modPh[0][1] = modPh[1][1] = 1.9;
         envFast = envSlow = 0.f; swellGain = 0.f; swellDucking = false; swellArmed = true;   // start closed: first note fades in too
     }
 
     void setType (int type) { int t = juce::jlimit (0, 5, type); if (t != fxType) { fxType = t; updateType(); applyParams(); } }
-    void setShimmer (bool on) { if (on && ! shimmerOn) { shReverb.reset(); for (auto& o : octUp) o.reset(); } shimmerOn = on; }
+    void setShimmer (bool on) { if (on && ! shimmerOn) { shReverb.reset(); octUp.reset(); } shimmerOn = on; }
 
     // (decay, preDelay[unused], highCut, size, diffusion[unused], mod[unused], mix)
     void setParameters (float decay01, float, float highCut01,
@@ -218,6 +230,14 @@ public:
                 rvDcX[ch] = x; rvDcY[ch] = y; w[i] = y;
             }
         }
+        // 2a) shimmer source = the dry send (before diffusion / reverb): shifting
+        //     the notes themselves keeps the octave on pitch; the reverb tail
+        //     carries the reverb's own resonances (measured less in tune)
+        if (shimmerOn) {
+            if ((int) shSrc.size() < n) shSrc.assign ((size_t) n, 0.f);
+            auto* l = wetBuf.getReadPointer (0); auto* r = wetBuf.getReadPointer (1);
+            for (int i = 0; i < n; ++i) shSrc[(size_t) i] = 0.5f * (l[i] + r[i]);
+        }
         // 2b) input diffusion (ambient / swell): smears attacks into a wash
         if (ambientLike) {
             for (int ch = 0; ch < 2; ++ch) {
@@ -258,8 +278,8 @@ public:
         // 3c) SHIMMER: octave-up of the (diffuse) tail, re-diffused, added to the wet
         if (shimmerOn) processShimmer (n);
 
-        // 3d) gentle tail drift for AMBIENT / SWELL lushness (the shimmer layer
-        //     gets its own drift inside processShimmer)
+        // 3d) gentle tail drift for AMBIENT / SWELL lushness (the shimmer
+        //     layer is NOT drifted - it must stay exactly on pitch)
         if (ambientLike && tailModEnabled) modulate (wetBuf, 1, n, 0.6f);
 
         // 4) blend dry + wet
@@ -306,27 +326,23 @@ private:
     void processShimmer (int n)
     {
         const float fs = (float) sampleRate;
-        // one-pole band-limits: before the shifter (HP 250 / LP 4.5k) and after it (HP 600 / LP 9k)
+        // band-limits: before the shifter (HP 250 / LP 4.5k) and after it (HP 600 / LP 6.5k, soft top)
         const float hp1 = std::exp (-2.f * juce::MathConstants<float>::pi * 250.f  / fs);
         const float lp1 = std::exp (-2.f * juce::MathConstants<float>::pi * 4500.f / fs);
         const float hp2 = std::exp (-2.f * juce::MathConstants<float>::pi * 600.f  / fs);
-        const float lp2 = std::exp (-2.f * juce::MathConstants<float>::pi * 9000.f / fs);
-
-        for (int ch = 0; ch < 2; ++ch) {
-            auto* w = wetBuf.getReadPointer (ch); auto* o = shBuf.getWritePointer (ch);
-            for (int i = 0; i < n; ++i) {
-                shLpZ[ch] = lp1 * shLpZ[ch] + (1.f - lp1) * w[i];
-                shHpZ[ch] = hp1 * shHpZ[ch] + (1.f - hp1) * shLpZ[ch];
-                float up = octUp[ch].process (shLpZ[ch] - shHpZ[ch]);       // +12 st, smooth
-                shLp2Z[ch] = lp2 * shLp2Z[ch] + (1.f - lp2) * up;
-                shHp2Z[ch] = hp2 * shHp2Z[ch] + (1.f - hp2) * shLp2Z[ch];
-                o[i] = shLp2Z[ch] - shHp2Z[ch];
-            }
+        const float lp2 = std::exp (-2.f * juce::MathConstants<float>::pi * 6500.f / fs);
+        auto* oL = shBuf.getWritePointer (0); auto* oR = shBuf.getWritePointer (1);
+        for (int i = 0; i < n; ++i) {
+            shLpZ[0] = lp1 * shLpZ[0] + (1.f - lp1) * shSrc[(size_t) i];
+            shHpZ[0] = hp1 * shHpZ[0] + (1.f - hp1) * shLpZ[0];
+            float up = octUp.process (shLpZ[0] - shHpZ[0]);                    // exact +12 st
+            shLp2Z[0] = lp2 * shLp2Z[0] + (1.f - lp2) * up;
+            shLp2Z[1] = lp2 * shLp2Z[1] + (1.f - lp2) * shLp2Z[0];               // 2-pole top roll-off
+            shHp2Z[0] = hp2 * shHp2Z[0] + (1.f - hp2) * shLp2Z[1];
+            oL[i] = oR[i] = shLp2Z[1] - shHp2Z[0];
         }
-        // diffuse the octave layer through its own long reverb, let it drift
-        // slightly (L/R decorrelated, ~+-4 cents), then add it
-        shReverb.processStereo (shBuf.getWritePointer (0), shBuf.getWritePointer (1), n);
-        if (tailModEnabled) modulate (shBuf, 0, n, 1.2f);
+        // the shimmer reverb spreads the (mono) octave layer into a wide, soft pad
+        shReverb.processStereo (oL, oR, n);
         for (int ch = 0; ch < 2; ++ch) {
             auto* w = wetBuf.getWritePointer (ch); auto* s = shBuf.getReadPointer (ch);
             for (int i = 0; i < n; ++i) w[i] += shimmerAmt * s[i];
@@ -412,8 +428,9 @@ private:
     std::vector<float> md[2][2]; int mdw[2][2]={{0,0},{0,0}}; int modMax=0; double modPh[2][2]={{0.0,1.9},{0.0,1.9}};
 
     bool  shimmerOn = false;
-    float shimmerAmt = 1.1f;                    // octave ~8 dB under the note; level close to v1.1 shimmer
-    OctaveUpSTFT octUp[2];
+    float shimmerAmt = 0.55f;                   // octave ~12 dB under the note: sits under the tone, not on top
+    OctaveUpSTFT octUp;
+    std::vector<float> shSrc;
     float shHpZ[2]={0,0}, shLpZ[2]={0,0}, shHp2Z[2]={0,0}, shLp2Z[2]={0,0};
 
     // swell

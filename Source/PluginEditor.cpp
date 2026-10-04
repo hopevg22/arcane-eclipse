@@ -785,7 +785,9 @@ void ArcaneEclipseEditor::resetToDefault(){
 void ArcaneEclipseEditor::loadScene(int slot){
     if(scenes[slot].isEmpty()){ resetToDefault(); activeScene=slot; return; }
     if(scenes[slot].params.isValid()){
-        proc.apvts.replaceState(scenes[slot].params);
+        // Load a COPY: replaceState() adopts the tree it is given, so passing the
+        // saved one directly made every later tweak silently edit the saved patch.
+        proc.apvts.replaceState(scenes[slot].params.createCopy());
         // Scenes saved before v1.1 carry no Dual settings: start them in single-amp mode
         if(! scenes[slot].params.getChildWithProperty("id",ArcaneEclipseProcessor::idDualOn).isValid())
             if(auto* d=proc.apvts.getParameter(ArcaneEclipseProcessor::idDualOn)) d->setValueNotifyingHost(0.f);
