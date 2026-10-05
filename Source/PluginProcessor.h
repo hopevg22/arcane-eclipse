@@ -15,6 +15,9 @@
 class ArcaneEclipseProcessor : public juce::AudioProcessor
 {
 public:
+    // v1.1: startup screen shows once per plugin load (not on every window open)
+    bool splashShown = false;
+
     ArcaneEclipseProcessor();
     ~ArcaneEclipseProcessor() override = default;
 

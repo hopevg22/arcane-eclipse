@@ -96,7 +96,9 @@ endif()
 
 juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/background.png
-    Resources/knobs/knob_v11.png)
+    Resources/knobs/knob_v11.png
+    Resources/logo_amari_mark_v2.png
+    Resources/fonts/Cinzel-SemiBold.ttf)
 
 target_link_libraries(ArcaneEclipse PRIVATE
     ArcaneEclipseAssets

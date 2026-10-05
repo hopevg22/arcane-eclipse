@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "AEActivationDialog.h"
+#include "AESplash.h"
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 namespace AEP {
@@ -186,6 +187,9 @@ private:
     AEAccess licAccess = AEAccess::Licensed;
     int licCheckTick = 0;
     void showLicenseGate(AEActivationDialog::Mode m);
+    void maybeShowLicenseGate();
+    std::unique_ptr<AESplash> splash;                 // v1.1 startup screen
+    void showSplash();
     void closeLicenseGate();
     void updateLicenseState();
     CreditsPanel creditsPanel;

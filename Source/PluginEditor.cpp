@@ -202,6 +202,7 @@ static const char* kCreditsText =
     "RTNeural\n"
     "  Copyright (c) 2020 jatinchowdhury18\n"
     "  BSD 3-Clause License\n\n"
+    "\f"                                   // column break
     "math_approx\n"
     "  Copyright (c) 2024 jatinchowdhury18\n"
     "  BSD 3-Clause License\n\n"
@@ -211,6 +212,9 @@ static const char* kCreditsText =
     "nlohmann/json\n"
     "  Copyright (c) 2013-2025 Niels Lohmann\n"
     "  MIT License\n\n"
+    "Cinzel font\n"
+    "  Copyright (c) 2020 The Cinzel Project Authors\n"
+    "  SIL Open Font License 1.1\n\n"
     "VST is a registered trademark of\n"
     "Steinberg Media Technologies GmbH.\n"
     "VST3 SDK used under MIT License.\n\n"
@@ -229,20 +233,25 @@ CreditsPanel::CreditsPanel()
 void CreditsPanel::paint(juce::Graphics& g)
 {
     auto b=getLocalBounds().toFloat();
-    g.setColour(juce::Colour(0xf0101018)); g.fillRoundedRectangle(b,12.f);
+    g.setColour(juce::Colour(0xff100d17)); g.fillRoundedRectangle(b,12.f);
     g.setColour(kPurple); g.drawRoundedRectangle(b.reduced(0.5f),12.f,1.8f);
     g.setColour(kPurple.withAlpha(0.15f)); g.fillRoundedRectangle(b.withHeight(46),12.f);
     g.setFont(juce::Font(15.f).boldened()); g.setColour(kText);
     g.drawText("CREDITS & LICENSES",getLocalBounds().withHeight(46),juce::Justification::centred);
     g.setColour(kCardBd); g.drawHorizontalLine(46,16.f,(float)getWidth()-16);
-    juce::Rectangle<int> textArea(20,54,getWidth()-40,getHeight()-100);
-    g.setFont(juce::Font(10.5f)); g.setColour(juce::Colour(0xffcccce0));
-    juce::AttributedString as; as.setWordWrap(juce::AttributedString::byWord);
-    as.setJustification(juce::Justification::topLeft);
-    as.setColour(juce::Colour(0xffcccce0)); as.setFont(juce::Font(10.5f));
-    as.append(juce::String(kCreditsText));
-    juce::TextLayout tl; tl.createLayout(as,(float)textArea.getWidth());
-    tl.draw(g,textArea.toFloat());
+    // two columns so the whole list fits without scrolling
+    const auto cols = juce::StringArray::fromTokens(juce::String(kCreditsText), "\f", "");
+    const int colW = (getWidth() - 60) / 2;
+    for (int i = 0; i < cols.size() && i < 2; ++i) {
+        juce::Rectangle<int> area(22 + i * (colW + 16), 58, colW, getHeight() - 104);
+        juce::AttributedString as; as.setWordWrap(juce::AttributedString::byWord);
+        as.setJustification(juce::Justification::topLeft);
+        as.setLineSpacing(1.5f);
+        as.append(cols[i], juce::Font(juce::FontOptions(12.f)), juce::Colour(0xffe2deef));
+        juce::TextLayout tl; tl.createLayout(as,(float)area.getWidth());
+        tl.draw(g,area.toFloat());
+    }
+    g.setColour(kCardBd); g.fillRect(getWidth()/2, 64, 1, getHeight()-120);
     closeBtn.setBounds(getWidth()/2-40,getHeight()-38,80,26);
 }
 
@@ -529,19 +538,43 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     trialBtn.setTooltip("Free trial: click to buy or activate a license");
     trialBtn.onClick=[this]{ showLicenseGate(AEActivationDialog::Mode::TrialActive); };
     addChildComponent(trialBtn);
-    {
-        auto& lm = AELicenseManager::getInstance();
-        lm.refresh();
-        licAccess = lm.getAccess();
-        static bool trialReminderShown = false;          // once per host session, not every window open
-        if (licAccess == AEAccess::TrialAvailable)      showLicenseGate(AEActivationDialog::Mode::Welcome);
-        else if (licAccess == AEAccess::TrialExpired)   showLicenseGate(AEActivationDialog::Mode::Expired);
-        else if (licAccess == AEAccess::TrialActive && !trialReminderShown) {
-            trialReminderShown = true;
-            showLicenseGate(AEActivationDialog::Mode::TrialActive);
-        }
-        trialBtn.setVisible(licAccess == AEAccess::TrialActive);
+    AELicenseManager::getInstance().refresh();
+    licAccess = AELicenseManager::getInstance().getAccess();
+    trialBtn.setVisible(licAccess == AEAccess::TrialActive);
+
+    // Startup screen first (once per plugin load), then any license / trial screen.
+    if (!proc.splashShown) { proc.splashShown = true; showSplash(); }
+    else                   maybeShowLicenseGate();
+}
+
+void ArcaneEclipseEditor::maybeShowLicenseGate()
+{
+    licAccess = AELicenseManager::getInstance().getAccess();
+    static bool trialReminderShown = false;              // once per host session, not every window open
+    if (licAccess == AEAccess::TrialAvailable)      showLicenseGate(AEActivationDialog::Mode::Welcome);
+    else if (licAccess == AEAccess::TrialExpired)   showLicenseGate(AEActivationDialog::Mode::Expired);
+    else if (licAccess == AEAccess::TrialActive && !trialReminderShown) {
+        trialReminderShown = true;
+        showLicenseGate(AEActivationDialog::Mode::TrialActive);
     }
+    trialBtn.setVisible(licAccess == AEAccess::TrialActive && !tunerVisible);
+}
+
+void ArcaneEclipseEditor::showSplash()
+{
+    splash = std::make_unique<AESplash>();
+    splash->setBounds(getLocalBounds());
+    splash->onDismissed = [this]{
+        juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+        juce::MessageManager::callAsync([safe]{
+            if (safe == nullptr) return;
+            safe->splash.reset();
+            safe->maybeShowLicenseGate();
+            safe->repaint();
+        });
+    };
+    addAndMakeVisible(*splash);
+    splash->toFront(true);
 }
 
 void ArcaneEclipseEditor::showLicenseGate(AEActivationDialog::Mode m)
@@ -580,7 +613,7 @@ void ArcaneEclipseEditor::updateLicenseState()
 ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);}
 void ArcaneEclipseEditor::timerCallback()
 {
-    if (++licCheckTick >= 30) { licCheckTick = 0; if (!activationDialog) updateLicenseState(); }
+    if (++licCheckTick >= 30) { licCheckTick = 0; if (!activationDialog && !splash) updateLicenseState(); }
     learningID = proc.midiLearningParamID();
     learningAction = proc.actionLearningNow();
     {
@@ -769,7 +802,7 @@ void ArcaneEclipseEditor::refreshSceneButtons(){
 }
 void ArcaneEclipseEditor::showCredits()
 {
-    int pw=440, ph=540;
+    int pw=640, ph=600;
     creditsPanel.setBounds((W-pw)/2,(H-ph)/2,pw,ph);
     creditsPanel.setVisible(true);
     creditsPanel.toFront(false);
@@ -1060,13 +1093,14 @@ void ArcaneEclipseEditor::resized()
     abBtn   .setBounds(RR(1372,13,1408,50));
     trialBtn.setBounds(RR(1108,17,1306,46));
     if (activationDialog) activationDialog->setBounds(getLocalBounds());
+    if (splash) splash->setBounds(getLocalBounds());
     // dual level faders + MATCH inside the speaker grille
     trimSl[0].setBounds(RR(1114,694,1150,774));
     trimSl[1].setBounds(RR(1203,694,1239,774));
     matchBtn .setBounds(RR(1153,777,1200,792));
 
     tbCab.setBounds(-200,-200,1,1);
-    creditsPanel.setBounds((W-440)/2,(H-540)/2,440,540);
+    creditsPanel.setBounds((W-640)/2,(H-600)/2,640,600);
 }
 
 // ── paint ─────────────────────────────────────────────────────────────────────
@@ -1556,6 +1590,27 @@ void ArcaneEclipseEditor::paintScenesLive(juce::Graphics& g)
 
 void ArcaneEclipseEditor::paintFooterLive(juce::Graphics& g)
 {
+    // v1.1 footer logo: hide the baked flat "A" + "AMARI LABS" wording under a clean
+    // copy of the empty footer strip just to its right, then draw the new mark alone,
+    // centred ("DEVELOPED BY AMARI LABS" already sits at the left).
+    {
+        static juce::Image bg   = juce::ImageCache::getFromMemory(BinaryData::background_png,BinaryData::background_pngSize);
+        static juce::Image mark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_v2_png,BinaryData::logo_amari_mark_v2_pngSize);
+        if (bg.isValid()) {
+            const float x0=666.f, x1=848.f, y0=985.f, y1=1032.f, shift=202.f;   // render px
+            auto dst = RF(x0,y0,x1,y1);
+            g.drawImage(bg, juce::roundToInt(dst.getX()), juce::roundToInt(dst.getY()),
+                        juce::roundToInt(dst.getWidth()), juce::roundToInt(dst.getHeight()),
+                        (int)(x0+shift), (int)y0, (int)(x1-x0), (int)(y1-y0));
+        }
+        if (mark.isValid()) {
+            const float h = SY(42.f), w = h * (float) mark.getWidth() / (float) mark.getHeight();
+            juce::Rectangle<float> r (0.f, 0.f, w, h);
+            r.setCentre((float) W * 0.5f, SY(1008.f));
+            g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            g.drawImage(mark, r, juce::RectanglePlacement::stretchToFit);
+        }
+    }
     // STEREO / MONO (repaint over the baked word so it can change)
     const bool st=proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idStereoMode)->load()>.5f;
     const bool db=st && proc.apvts.getRawParameterValue(ArcaneEclipseProcessor::idDoubler)->load()>.5f;
