@@ -523,24 +523,64 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
     updateDualUI();
     startTimerHz(15);
 
-    // License check — show activation dialog if not licensed
-    if (!AELicenseManager::getInstance().loadFromDisk())
+    // License gate: licensed users see nothing; first run offers the 7-day trial;
+    // during the trial a reminder shows once per session; after it, the gate stays.
+    makeHotspot(trialBtn,6.f);
+    trialBtn.setTooltip("Free trial: click to buy or activate a license");
+    trialBtn.onClick=[this]{ showLicenseGate(AEActivationDialog::Mode::TrialActive); };
+    addChildComponent(trialBtn);
     {
-        activationDialog = std::make_unique<AEActivationDialog>();
-        activationDialog->setBounds(0, 0, W, H);
-        activationDialog->onActivated = [this]{
-            activationDialog->setVisible(false);
-            activationDialog.reset();
-            repaint();
-        };
-        addAndMakeVisible(*activationDialog);
-        activationDialog->toFront(true);
+        auto& lm = AELicenseManager::getInstance();
+        lm.refresh();
+        licAccess = lm.getAccess();
+        static bool trialReminderShown = false;          // once per host session, not every window open
+        if (licAccess == AEAccess::TrialAvailable)      showLicenseGate(AEActivationDialog::Mode::Welcome);
+        else if (licAccess == AEAccess::TrialExpired)   showLicenseGate(AEActivationDialog::Mode::Expired);
+        else if (licAccess == AEAccess::TrialActive && !trialReminderShown) {
+            trialReminderShown = true;
+            showLicenseGate(AEActivationDialog::Mode::TrialActive);
+        }
+        trialBtn.setVisible(licAccess == AEAccess::TrialActive);
     }
+}
+
+void ArcaneEclipseEditor::showLicenseGate(AEActivationDialog::Mode m)
+{
+    if (activationDialog) { activationDialog->setMode(m); activationDialog->toFront(true); return; }
+    activationDialog = std::make_unique<AEActivationDialog>(m);
+    activationDialog->setBounds(getLocalBounds());
+    activationDialog->onActivated  = [this]{ closeLicenseGate(); };
+    activationDialog->onContinue   = [this]{ closeLicenseGate(); };
+    activationDialog->onStartTrial = [this]{ AELicenseManager::getInstance().startTrial(); closeLicenseGate(); };
+    addAndMakeVisible(*activationDialog);
+    activationDialog->toFront(true);
+}
+
+void ArcaneEclipseEditor::closeLicenseGate()
+{
+    // deferred: this runs from inside one of the dialog's own button callbacks
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    juce::MessageManager::callAsync([safe]{
+        if (safe == nullptr) return;
+        safe->activationDialog.reset();
+        safe->updateLicenseState();
+    });
+}
+
+void ArcaneEclipseEditor::updateLicenseState()
+{
+    auto prev = licAccess;
+    licAccess = AELicenseManager::getInstance().getAccess();
+    trialBtn.setVisible(licAccess == AEAccess::TrialActive && !tunerVisible);
+    if (licAccess == AEAccess::TrialExpired && prev != AEAccess::TrialExpired)
+        showLicenseGate(AEActivationDialog::Mode::Expired);   // trial ran out while open
+    repaint();
 }
 
 ArcaneEclipseEditor::~ArcaneEclipseEditor(){stopTimer();setLookAndFeel(nullptr);}
 void ArcaneEclipseEditor::timerCallback()
 {
+    if (++licCheckTick >= 30) { licCheckTick = 0; if (!activationDialog) updateLicenseState(); }
     learningID = proc.midiLearningParamID();
     learningAction = proc.actionLearningNow();
     {
@@ -1018,6 +1058,8 @@ void ArcaneEclipseEditor::resized()
     // header icons: power (bypass) and [ ] (A/B)
     powerBtn.setBounds(RR(1464,13,1500,50));
     abBtn   .setBounds(RR(1372,13,1408,50));
+    trialBtn.setBounds(RR(1108,17,1306,46));
+    if (activationDialog) activationDialog->setBounds(getLocalBounds());
     // dual level faders + MATCH inside the speaker grille
     trimSl[0].setBounds(RR(1114,694,1150,774));
     trimSl[1].setBounds(RR(1203,694,1239,774));
@@ -1151,6 +1193,22 @@ void ArcaneEclipseEditor::paintHeaderLive(juce::Graphics& g)
         } else {
             g.setColour(kPurple.withAlpha(0.18f)); g.fillRoundedRectangle(ic.expanded(2.f),SX(8.f));
         }
+    }
+
+    // Free-trial pill: "TRIAL · N DAYS LEFT" (click opens buy / activate)
+    if (licAccess == AEAccess::TrialActive)
+    {
+        auto pill = RF(1108,17,1306,46);
+        const int left = AELicenseManager::getInstance().trialDaysLeft();
+        const bool urgent = left <= 2;
+        auto acc = urgent ? juce::Colour(0xffff8a5c) : kPurple;
+        g.setColour(acc.withAlpha(0.16f)); g.fillRoundedRectangle(pill, pill.getHeight()*0.5f);
+        g.setColour(acc.withAlpha(0.9f));  g.drawRoundedRectangle(pill.reduced(0.6f), pill.getHeight()*0.5f, 1.3f);
+        const juce::String dot = juce::String::fromUTF8("\xc2\xb7");
+        juce::String t = left <= 1 ? "TRIAL " + dot + " LAST DAY"
+                                   : "TRIAL " + dot + " " + juce::String(left) + " DAYS LEFT";
+        haloText(g, t, juce::Font(SY(13.f)).boldened(),
+                 kText, pill.toNearestInt(), juce::Justification::centred);
     }
 
     // Bank dots: the render has 7; v1.1 has 8 banks, so repaint the row

@@ -32,6 +32,10 @@ ArcaneEclipseProcessor::ArcaneEclipseProcessor()
     for (auto& c : ccMap) c.store(-1);
     for (auto& c : actionCC) c.store(-1);
     for (auto& v : prevCCVal) v = 0;
+
+    // Load the license / trial state here, not only when the window opens, so a
+    // DAW project reopened with the plugin window closed still plays.
+    AELicenseManager::getInstance().refresh();
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::createParameterLayout()
@@ -196,8 +200,8 @@ void ArcaneEclipseProcessor::updateEQ()
 
 void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
-    // License gate: silence all audio if not activated
-    if (!AELicenseManager::getInstance().isActivated())
+    // License gate: silence all audio unless licensed or inside the free trial
+    if (!AELicenseManager::getInstance().isAudioEnabled())
     { buffer.clear(); return; }
     juce::ScopedNoDenormals noDenormals;
     int numSamples = buffer.getNumSamples(), numCh = buffer.getNumChannels();

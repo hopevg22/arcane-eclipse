@@ -181,6 +181,13 @@ private:
     juce::String learningID;
     std::unique_ptr<juce::AlertWindow> renameWindow;
     std::unique_ptr<AEActivationDialog> activationDialog;
+    // v1.1 free trial: license gate + header "TRIAL · N DAYS LEFT" pill
+    juce::TextButton trialBtn;
+    AEAccess licAccess = AEAccess::Licensed;
+    int licCheckTick = 0;
+    void showLicenseGate(AEActivationDialog::Mode m);
+    void closeLicenseGate();
+    void updateLicenseState();
     CreditsPanel creditsPanel;
     std::unique_ptr<juce::TextButton> helpBtn;
     void showCredits();
