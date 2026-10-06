@@ -56,6 +56,21 @@ static juce::String slotCode(int idx){
     return juce::String(idx/4+1)+juce::String::charToString(c);
 }
 
+// Factory presets used to carry their slot in the name ("1A - Lead the Way"), which the
+// display then doubled ("1A   1A - Lead the Way"). Drop a leading "<digit><A-D> - " on load.
+static juce::String stripSlotPrefix(const juce::String& n){
+    auto t = n.trimStart();
+    if (t.length() > 3 && juce::CharacterFunctions::isDigit(t[0])
+        && juce::String("ABCDabcd").containsChar(t[1])) {
+        auto rest = t.substring(2).trimStart();
+        if (rest.startsWithChar('-') || rest.startsWithChar((juce::juce_wchar)0x2013)) {
+            rest = rest.substring(1).trimStart();
+            if (rest.isNotEmpty()) return rest;
+        }
+    }
+    return n;
+}
+
 // ── AELAF ─────────────────────────────────────────────────────────────────────
 AELAF::AELAF(){
     setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff252532));
@@ -843,7 +858,7 @@ void ArcaneEclipseEditor::loadPresets()
         if (e->getTagName() != "Scene") continue;
         int i = e->getIntAttribute("idx", -1);
         if (i < 0 || i >= kNumScenes) continue;
-        scenes[i].name    = e->getStringAttribute("name", "Empty");
+        scenes[i].name    = stripSlotPrefix(e->getStringAttribute("name", "Empty"));
         scenes[i].namPath = e->getStringAttribute("nam");
         scenes[i].irPath  = e->getStringAttribute("ir");
         scenes[i].namPath2= e->getStringAttribute("nam2");
@@ -993,7 +1008,7 @@ void ArcaneEclipseEditor::importScene(int slot){
             if(xml==nullptr) return;
             auto t = juce::ValueTree::fromXml(*xml);
             if(!t.isValid() || !t.hasType("AETONE")) return;
-            scenes[slot].name    = t.getProperty("name", slotCode(slot)).toString();
+            scenes[slot].name    = stripSlotPrefix(t.getProperty("name", slotCode(slot)).toString());
             scenes[slot].namPath = t.getProperty("nam","").toString();
             scenes[slot].irPath  = t.getProperty("ir","").toString();
             scenes[slot].namPath2= t.getProperty("nam2","").toString();
