@@ -31,7 +31,7 @@ class AmpSim
 {
     static constexpr double kPi = 3.14159265358979323846;   // M_PI is not standard (MSVC)
 public:
-    enum Voicing { Clean = 0, Crunch, HighGain };
+    enum Voicing { Clean = 0, Crunch, HighGain, CleanV2, CleanV3 };   // order = built-in amp index
 
     void prepare (double sampleRate)
     {
@@ -165,6 +165,12 @@ private:
                                     0,   1.1, 0.0,  12, 10, 0.0, 650, 12, 7000, 3.5, 0, 0.0, 0.9 };
             case Crunch:   return { 90, 900, 1.0, 3.0, 18.0, 1.5, 0.15, 0.25,
                                     140, 1.6, 0.07, 12, 12, 2.0, 700, 12, 0, 0.0, 110, 3.5, 0.6 };
+            case CleanV2:  // matched to Hope's "Clean V2" capture: light drive, slight asymmetry (tone lives in Eclipse 1x12 v2)
+                           return { 40, 1500, 0.0, 0.2, 0.914, 1.0, 0.0, 0.20,
+                                    0,   1.0, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 25.2 };   // trim: same loudness as Clean v1
+            case CleanV3:  // matched to Hope's "Clean V4" capture: more breakup (tone lives in Eclipse 1x12 v3)
+                           return { 40, 1500, 0.0, 1.2, 5.486, 1.0, 0.0, 0.0,
+                                    0,   1.0, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 3.43 };   // trim: same loudness as Clean v1
             default:       return { 110, 700, 0.5, 8.0, 55.0, 2.0, 0.10, 0.20,
                                     180, 2.2, 0.20, 10, 12, -1.0, 750, 12, 0, 0.0, 100, 4.5, 0.42 };
         }

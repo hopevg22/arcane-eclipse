@@ -1812,9 +1812,11 @@ void ArcaneEclipseEditor::showFieldMenu(bool ir)
     juce::PopupMenu m;
     m.addSectionHeader(ir ? "Built-in cabinets" : "Built-in amps");
     const int nB = ir ? P::kNumBuiltinCabs : P::kNumBuiltinAmps;
-    for(int i=0;i<nB;++i)
+    for(int k=0;k<nB;++k){
+        const int i = ir ? P::kCabMenuOrder[k] : P::kAmpMenuOrder[k];     // display order; ids stay the index
         m.addItem(100+i, ir ? P::builtinCabName(i) : P::builtinAmpName(i), true,
                   ir ? proc.getBuiltinCab(a)==i : proc.getBuiltinAmp(a)==i);
+    }
 
     auto libDir = P::libraryRoot().getChildFile(ir ? "IRs" : "Models");
     auto files = std::make_shared<juce::Array<juce::File>>();
