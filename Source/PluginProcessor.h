@@ -63,7 +63,7 @@ public:
     // A model/IR is identified by a "ref": "builtin:amp/clean", "builtin:cab/4x12",
     // "library:Models/Some Amp.nam" (relative to the library folder, so presets
     // work on Windows and Mac alike) or an absolute file path.
-    static constexpr int kNumBuiltinAmps = 3, kNumBuiltinCabs = 3;
+    static constexpr int kNumBuiltinAmps = 4, kNumBuiltinCabs = 3;
     static juce::String builtinAmpName(int i);
     static juce::String builtinCabName(int i);
     static juce::String builtinAmpRef(int i);

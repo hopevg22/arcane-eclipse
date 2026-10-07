@@ -694,8 +694,8 @@ bool ArcaneEclipseProcessor::loadModelAny(const juce::File& f, int slot, juce::S
 }
 
 // ── Built-in amps + cabinets, library refs (v1.1) ────────────────────────────
-static const char* const kAmpKeys[] = { "clean", "crunch", "lead" };
-static const char* const kAmpNames[] = { "Eclipse Clean", "Eclipse Crunch", "Eclipse Lead" };
+static const char* const kAmpKeys[] = { "clean", "crunch", "lead", "clean2" };   // order = AmpSim::Voicing
+static const char* const kAmpNames[] = { "Eclipse Clean", "Eclipse Crunch", "Eclipse Lead", "Eclipse Clean V2" };
 static const char* const kCabKeys[] = { "1x12", "2x12", "4x12" };
 static const char* const kCabNames[] = { "Eclipse 1x12 Open", "Eclipse 2x12", "Eclipse 4x12" };
 
