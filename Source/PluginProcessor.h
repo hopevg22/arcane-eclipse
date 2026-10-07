@@ -11,6 +11,7 @@
 #include "RoomReverb.h"
 #include "StandardDelay.h"
 #include "Doubler.h"
+#include "AmpSim.h"
 
 class ArcaneEclipseProcessor : public juce::AudioProcessor
 {
@@ -53,9 +54,33 @@ public:
     juce::String getLoadedIRName (int slot = 0) const { return amps[slotIdx(slot)].irName; }
     juce::String getNAMPath(int slot = 0) const { return amps[slotIdx(slot)].namPath; }
     juce::String getIRPath (int slot = 0) const { return amps[slotIdx(slot)].irPath; }
-    bool isNAMLoaded(int slot = 0) const { return amps[slotIdx(slot)].model != nullptr; }
+    // "an amp is loaded": a NAM/.aecap model OR a built-in amp
+    bool isNAMLoaded(int slot = 0) const { return hasAmp(amps[slotIdx(slot)]); }
     bool isIRLoaded (int slot = 0) const { return amps[slotIdx(slot)].irLoaded; }
     bool isDualActive() const;          // Dual on AND amp 2 has a model or an IR
+
+    // ── Built-in amps + cabinets (v1.1) and the Amari Library ────────────────
+    // A model/IR is identified by a "ref": "builtin:amp/clean", "builtin:cab/4x12",
+    // "library:Models/Some Amp.nam" (relative to the library folder, so presets
+    // work on Windows and Mac alike) or an absolute file path.
+    static constexpr int kNumBuiltinAmps = 3, kNumBuiltinCabs = 3;
+    static juce::String builtinAmpName(int i);
+    static juce::String builtinCabName(int i);
+    static juce::String builtinAmpRef(int i);
+    static juce::String builtinCabRef(int i);
+    static int  builtinAmpFromRef(const juce::String& ref);   // -1 if not a built-in amp
+    static int  builtinCabFromRef(const juce::String& ref);
+    static bool isBuiltinRef(const juce::String& ref) { return ref.startsWith("builtin:"); }
+    static juce::File libraryRoot();                          // .../Amari Labs/Arcane Eclipse
+    static juce::String refForFile(const juce::File& f);      // library-relative when inside the library
+    static juce::File resolveRef(const juce::String& ref);    // file for a non-built-in ref ({} if missing)
+    bool loadBuiltinAmp(int v, int slot = 0);
+    bool loadBuiltinCab(int c, int slot = 0);
+    int  getBuiltinAmp(int slot = 0) const { return amps[slotIdx(slot)].builtin; }
+    int  getBuiltinCab(int slot = 0) const { return amps[slotIdx(slot)].cab; }
+    bool loadModelRef(const juce::String& ref, int slot, juce::String& error);
+    bool loadIRRef(const juce::String& ref, int slot);
+    void loadDefaultRig();                                    // Eclipse Clean + Eclipse 1x12 Open, amp 2 empty
 
     // ── Overdrive pedal capture (v1.1.1) ─────────────────────────────────────
     // A NAM pedal capture loaded here replaces the built-in drive circuit.
@@ -171,7 +196,13 @@ private:
         juce::dsp::Convolution conv;
         bool irLoaded = false;
         juce::String namName, irName, namPath, irPath;
+        int builtin = -1;                         // built-in amp voicing (0..2), -1 = NAM / none
+        int cab = -1;                             // built-in cabinet (0..2), -1 = file IR / none
+        AmpSim sim;
+        float simGain = -1.f;                     // last GAIN sent to the built-in amp
     };
+    static bool hasAmp(const AmpSlot& a) { return a.model != nullptr || a.builtin >= 0; }
+    void runAmp(AmpSlot& a, const float* in, float* out, int numSamples, float preGain);
     AmpSlot amps[kNumAmpSlots];
     AmpSlot odSlot;                                          // overdrive pedal capture (no IR)
     StereoDoubler doubler;

@@ -98,7 +98,10 @@ juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/background.png
     Resources/knobs/knob_v11.png
     Resources/logo_amari_mark_v2.png
-    Resources/fonts/Cinzel-SemiBold.ttf)
+    Resources/fonts/Cinzel-SemiBold.ttf
+    Resources/cabs/cab_eclipse_1x12.wav
+    Resources/cabs/cab_eclipse_2x12.wav
+    Resources/cabs/cab_eclipse_4x12.wav)
 
 target_link_libraries(ArcaneEclipse PRIVATE
     ArcaneEclipseAssets

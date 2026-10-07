@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include <BinaryData.h>
 #include <cmath>
 #include "PluginEditor.h"
 #include "AecapLoader.h"
@@ -36,6 +37,9 @@ ArcaneEclipseProcessor::ArcaneEclipseProcessor()
     // Load the license / trial state here, not only when the window opens, so a
     // DAW project reopened with the plugin window closed still plays.
     AELicenseManager::getInstance().refresh();
+
+    // v1.1: a fresh instance plays straight away on a built-in amp and cabinet
+    loadDefaultRig();
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::createParameterLayout()
@@ -123,6 +127,9 @@ void ArcaneEclipseProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         a.upIn .assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
         a.upOut.assign((size_t)(samplesPerBlock * 3 + 32), 0.f);
         a.rsIn.reset(); a.rsOut.reset();
+        a.sim.prepare(sampleRate);
+        { std::vector<float> warm((size_t) juce::jmax(1, samplesPerBlock), 0.f);   // size AmpSim's buffer here, not on the audio thread
+          a.sim.processBlock(warm.data(), (int) warm.size()); a.sim.reset(); }
     }
     for (auto& b : dualBuf) b.setSize(2, samplesPerBlock + 32, false, true, false);
     dryBuf.setSize(2, samplesPerBlock + 32, false, true, false);
@@ -324,7 +331,8 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 5. AMP GAIN — pre-NAM input level
     float ampGainDb = juce::jmap(apvts.getRawParameterValue(idAmpGain)->load(), 0.f,10.f,-6.f,18.f);
-    buffer.applyGain(juce::Decibels::decibelsToGain(ampGainDb));
+    const float ampGainLin = juce::Decibels::decibelsToGain(ampGainDb);
+    buffer.applyGain(ampGainLin);
 
     // 6. AMP(S) — NAM model(s). Mono amp input: consistent level whether the
     //    host feeds a mono guitar duplicated on both channels (DAW) or on a
@@ -338,9 +346,9 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     if (! dual)
     {
         // Single amp (unchanged v1.0 behaviour): no model = signal passes through
-        if (amps[0].model != nullptr) {
+        if (hasAmp(amps[0])) {
             buildMono();
-            runNAM(amps[0], monoBuf.data(), namOutBuf.data(), numSamples);
+            runAmp(amps[0], monoBuf.data(), namOutBuf.data(), numSamples, ampGainLin);
             for (int ch = 0; ch < numCh; ++ch)
                 std::copy(namOutBuf.begin(), namOutBuf.begin() + numSamples, buffer.getWritePointer(ch));
         }
@@ -356,7 +364,7 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             auto& a = amps[s]; auto& db = dualBuf[s];
             if (db.getNumSamples() < numSamples) db.setSize(2, numSamples, false, false, true);
             const float* src = monoBuf.data();
-            if (a.model != nullptr) { runNAM(a, monoBuf.data(), namOutBuf.data(), numSamples); src = namOutBuf.data(); }
+            if (hasAmp(a)) { runAmp(a, monoBuf.data(), namOutBuf.data(), numSamples, ampGainLin); src = namOutBuf.data(); }
             for (int ch = 0; ch < 2; ++ch) std::copy(src, src + numSamples, db.getWritePointer(ch));
             if (a.irLoaded) {
                 auto blk = juce::dsp::AudioBlock<float>(db).getSubBlock(0, (size_t) numSamples);
@@ -512,6 +520,26 @@ void ArcaneEclipseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 }
 
 // ── Amp slots ────────────────────────────────────────────────────────────────
+// One amp on a mono block: a built-in amp or a NAM model. The block arrives
+// already scaled by the GAIN knob (a level into the NAM capture); a built-in
+// amp undoes that and uses GAIN as its own drive control instead, so the knob
+// sweeps the voicing's designed range from edge-of-breakup to full saturation.
+void ArcaneEclipseProcessor::runAmp(AmpSlot& a, const float* in, float* out, int numSamples, float preGain)
+{
+    if (a.builtin >= 0) {
+        const float undo = 1.f / juce::jmax(1.0e-4f, preGain);
+        for (int n = 0; n < numSamples; ++n) out[n] = in[n] * undo;
+        const float g = apvts.getRawParameterValue(idAmpGain)->load() / 10.f;
+        if (g != a.simGain) {                                  // tone is shaped by the shared amp EQ after
+            a.sim.setParams(g, 0.5f, 0.5f, 0.5f, 0.5f, 0.7f);
+            a.simGain = g;
+        }
+        a.sim.processBlock(out, numSamples);
+        return;
+    }
+    runNAM(a, in, out, numSamples);
+}
+
 // Runs one NAM model on a mono block, resampling to/from 48 kHz when needed.
 void ArcaneEclipseProcessor::runNAM(AmpSlot& a, const float* in, float* out, int numSamples)
 {
@@ -563,7 +591,7 @@ bool ArcaneEclipseProcessor::loadODModel(const juce::File& f, juce::String& erro
         const juce::ScopedLock lock(getCallbackLock());
         odSlot.model = std::move(model);
         odSlot.namName = f.getFileNameWithoutExtension();
-        odSlot.namPath = f.getFullPathName();
+        odSlot.namPath = refForFile(f);
         odSlot.rsIn.reset(); odSlot.rsOut.reset();
         std::fill(odSlot.upIn.begin(),  odSlot.upIn.end(),  0.f);
         std::fill(odSlot.upOut.begin(), odSlot.upOut.end(), 0.f);
@@ -581,7 +609,7 @@ void ArcaneEclipseProcessor::unloadODModel()
 bool ArcaneEclipseProcessor::isDualActive() const
 {
     return apvts.getRawParameterValue(idDualOn)->load() > .5f
-        && (amps[1].model != nullptr || amps[1].irLoaded);
+        && (hasAmp(amps[1]) || amps[1].irLoaded);
 }
 
 bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file, int slot)
@@ -595,8 +623,9 @@ bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file, int slot)
         {
             const juce::ScopedLock lock(getCallbackLock());
             a.model = std::move(model);
+            a.builtin = -1;
             a.namName = file.getFileNameWithoutExtension();
-            a.namPath = file.getFullPathName();
+            a.namPath = refForFile(file);
             a.rsIn.reset(); a.rsOut.reset();
             std::fill(a.upIn.begin(),  a.upIn.end(),  0.f);
             std::fill(a.upOut.begin(), a.upOut.end(), 0.f);
@@ -615,7 +644,8 @@ bool ArcaneEclipseProcessor::loadIR(const juce::File& file, int slot)
     a.conv.loadImpulseResponse(file, juce::dsp::Convolution::Stereo::yes,
         juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
     a.irName = file.getFileNameWithoutExtension();
-    a.irPath = file.getFullPathName();
+    a.irPath = refForFile(file);
+    a.cab = -1;
     a.irLoaded = true;
     return true;
 }
@@ -624,13 +654,13 @@ void ArcaneEclipseProcessor::unloadNAMModel(int slot)
 {
     auto& a = amps[slotIdx(slot)];
     const juce::ScopedLock lock(getCallbackLock());
-    a.model.reset(); a.namName = {}; a.namPath = {};
+    a.model.reset(); a.builtin = -1; a.namName = {}; a.namPath = {};
 }
 
 void ArcaneEclipseProcessor::unloadIR(int slot)
 {
     auto& a = amps[slotIdx(slot)];
-    a.irLoaded = false; a.irName = {}; a.irPath = {}; a.conv.reset();
+    a.irLoaded = false; a.cab = -1; a.irName = {}; a.irPath = {}; a.conv.reset();
 }
 
 juce::File ArcaneEclipseProcessor::aecapCacheDir()
@@ -651,16 +681,132 @@ bool ArcaneEclipseProcessor::loadModelAny(const juce::File& f, int slot, juce::S
     if (! c.ok) { error = c.error; return false; }
     auto nam = c.materializeModelTo(aecapCacheDir());
     bool ok = nam.existsAsFile() && loadNAMModel(nam, slot);
-    if (ok) { amps[slot].namName = f.getFileNameWithoutExtension(); amps[slot].namPath = f.getFullPathName(); }
+    if (ok) { amps[slot].namName = f.getFileNameWithoutExtension(); amps[slot].namPath = refForFile(f); }
     if (c.hasIR) {
         auto irf = aecapCacheDir().getChildFile("aecap_" + juce::String(juce::Time::getHighResolutionTicks()) + ".wav");
         if (irf.replaceWithData(c.irWav.getData(), c.irWav.getSize()) && loadIR(irf, slot)) {
             amps[slot].irName = f.getFileNameWithoutExtension();
-            amps[slot].irPath = f.getFullPathName();
+            amps[slot].irPath = refForFile(f);
         }
     }
     if (! ok) error = "The model inside this .aecap could not be loaded.";
     return ok;
+}
+
+// ── Built-in amps + cabinets, library refs (v1.1) ────────────────────────────
+static const char* const kAmpKeys[] = { "clean", "crunch", "lead" };
+static const char* const kAmpNames[] = { "Eclipse Clean", "Eclipse Crunch", "Eclipse Lead" };
+static const char* const kCabKeys[] = { "1x12", "2x12", "4x12" };
+static const char* const kCabNames[] = { "Eclipse 1x12 Open", "Eclipse 2x12", "Eclipse 4x12" };
+
+juce::String ArcaneEclipseProcessor::builtinAmpName(int i) { return kAmpNames[juce::jlimit(0, kNumBuiltinAmps - 1, i)]; }
+juce::String ArcaneEclipseProcessor::builtinCabName(int i) { return kCabNames[juce::jlimit(0, kNumBuiltinCabs - 1, i)]; }
+juce::String ArcaneEclipseProcessor::builtinAmpRef(int i)  { return juce::String("builtin:amp/") + kAmpKeys[juce::jlimit(0, kNumBuiltinAmps - 1, i)]; }
+juce::String ArcaneEclipseProcessor::builtinCabRef(int i)  { return juce::String("builtin:cab/") + kCabKeys[juce::jlimit(0, kNumBuiltinCabs - 1, i)]; }
+int ArcaneEclipseProcessor::builtinAmpFromRef(const juce::String& ref) {
+    for (int i = 0; i < kNumBuiltinAmps; ++i) if (ref == builtinAmpRef(i)) return i;
+    return -1;
+}
+int ArcaneEclipseProcessor::builtinCabFromRef(const juce::String& ref) {
+    for (int i = 0; i < kNumBuiltinCabs; ++i) if (ref == builtinCabRef(i)) return i;
+    return -1;
+}
+
+juce::File ArcaneEclipseProcessor::libraryRoot()
+{
+   #if JUCE_MAC
+    return juce::File("/Users/Shared/Amari Labs/Arcane Eclipse");
+   #elif JUCE_WINDOWS
+    return juce::File::getSpecialLocation(juce::File::commonApplicationDataDirectory)     // C:\ProgramData
+             .getChildFile("Amari Labs").getChildFile("Arcane Eclipse");
+   #else
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+             .getChildFile("Amari Labs").getChildFile("Arcane Eclipse");
+   #endif
+}
+
+juce::String ArcaneEclipseProcessor::refForFile(const juce::File& f)
+{
+    const auto root = libraryRoot();
+    if (f.isAChildOf(root))
+        return "library:" + f.getRelativePathFrom(root).replaceCharacter('\\', '/');
+    return f.getFullPathName();
+}
+
+// Library refs resolve against this computer's library folder. An absolute path
+// that doesn't exist here (a preset made on Windows opened on a Mac, or a moved
+// library) falls back to a file with the same name anywhere in the library.
+juce::File ArcaneEclipseProcessor::resolveRef(const juce::String& ref)
+{
+    if (ref.isEmpty() || isBuiltinRef(ref)) return {};
+    const auto root = libraryRoot();
+    if (ref.startsWith("library:")) {
+        auto f = root.getChildFile(ref.fromFirstOccurrenceOf("library:", false, false));
+        if (f.existsAsFile()) return f;
+    } else if (juce::File::isAbsolutePath(ref)) {
+        juce::File f(ref);
+        if (f.existsAsFile()) return f;
+    }
+    const auto name = ref.fromLastOccurrenceOf("/", false, false).fromLastOccurrenceOf("\\", false, false);
+    if (name.isNotEmpty() && root.isDirectory())
+        for (const auto& e : juce::RangedDirectoryIterator(root, true, "*", juce::File::findFiles))
+            if (e.getFile().getFileName().equalsIgnoreCase(name)) return e.getFile();
+    return {};
+}
+
+bool ArcaneEclipseProcessor::loadBuiltinAmp(int v, int slot)
+{
+    if (v < 0 || v >= kNumBuiltinAmps) return false;
+    auto& a = amps[slotIdx(slot)];
+    const juce::ScopedLock lock(getCallbackLock());
+    a.model.reset();
+    a.builtin = v;
+    a.sim.setVoicing((AmpSim::Voicing) v);
+    a.sim.reset();
+    a.simGain = -1.f;
+    a.namName = builtinAmpName(v);
+    a.namPath = builtinAmpRef(v);
+    return true;
+}
+
+bool ArcaneEclipseProcessor::loadBuiltinCab(int c, int slot)
+{
+    if (c < 0 || c >= kNumBuiltinCabs) return false;
+    static const void* const data[] = { BinaryData::cab_eclipse_1x12_wav, BinaryData::cab_eclipse_2x12_wav, BinaryData::cab_eclipse_4x12_wav };
+    static const int sizes[] = { BinaryData::cab_eclipse_1x12_wavSize, BinaryData::cab_eclipse_2x12_wavSize, BinaryData::cab_eclipse_4x12_wavSize };
+    auto& a = amps[slotIdx(slot)];
+    a.conv.loadImpulseResponse(data[c], (size_t) sizes[c], juce::dsp::Convolution::Stereo::yes,
+        juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
+    a.irName = builtinCabName(c);
+    a.irPath = builtinCabRef(c);
+    a.cab = c;
+    a.irLoaded = true;
+    return true;
+}
+
+bool ArcaneEclipseProcessor::loadModelRef(const juce::String& ref, int slot, juce::String& error)
+{
+    const int b = builtinAmpFromRef(ref);
+    if (b >= 0) return loadBuiltinAmp(b, slot);
+    auto f = resolveRef(ref);
+    if (! f.existsAsFile()) { error = "File not found."; return false; }
+    return loadModelAny(f, slot, error);
+}
+
+bool ArcaneEclipseProcessor::loadIRRef(const juce::String& ref, int slot)
+{
+    const int c = builtinCabFromRef(ref);
+    if (c >= 0) return loadBuiltinCab(c, slot);
+    auto f = resolveRef(ref);
+    return f.existsAsFile() && loadIR(f, slot);
+}
+
+void ArcaneEclipseProcessor::loadDefaultRig()
+{
+    loadBuiltinAmp(0, 0);
+    loadBuiltinCab(0, 0);
+    unloadNAMModel(1);
+    unloadIR(1);
 }
 
 void ArcaneEclipseProcessor::getStateInformation(juce::MemoryBlock& d)
@@ -710,16 +856,16 @@ void ArcaneEclipseProcessor::setStateInformation(const void* data, int sizeInByt
         apvts.replaceState(juce::ValueTree::fromXml(*xml));
         // Reload each amp's model + IR (sessions saved before v1.1 have no AMPS block)
         for (int i = 0; i < juce::jmin(kNumAmpSlots, namP.size()); ++i) {
-            juce::File nf(namP[i]), irf(irP[i]);
             juce::String err;
-            if (namP[i].isNotEmpty() && nf.existsAsFile()) { if (namP[i] != amps[i].namPath) loadModelAny(nf, i, err); }
-            else unloadNAMModel(i);
-            if (irP[i].isNotEmpty() && irP[i] != namP[i] && irf.existsAsFile()) { if (irP[i] != amps[i].irPath) loadIR(irf, i); }
-            else if (irP[i].isEmpty()) unloadIR(i);
+            if (namP[i].isEmpty()) unloadNAMModel(i);
+            else if (namP[i] != amps[i].namPath && ! loadModelRef(namP[i], i, err)) unloadNAMModel(i);
+            if (irP[i].isEmpty()) unloadIR(i);
+            else if (irP[i] != namP[i] && irP[i] != amps[i].irPath) loadIRRef(irP[i], i);
         }
         if (haveAmps) {
             juce::String err;
-            if (odP.isNotEmpty() && juce::File(odP).existsAsFile()) { if (odP != odSlot.namPath) loadODModel(juce::File(odP), err); }
+            auto odf = resolveRef(odP);
+            if (odP.isNotEmpty() && odf.existsAsFile()) { if (odP != odSlot.namPath) loadODModel(odf, err); }
             else unloadODModel();
         }
     }
