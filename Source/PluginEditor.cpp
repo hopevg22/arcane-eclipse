@@ -1961,6 +1961,10 @@ void ArcaneEclipseEditor::paintFooterLive(juce::Graphics& g)
     // copy of the empty footer strip just to its right, then draw the new mark alone,
     // centred ("DEVELOPED BY AMARI LABS" already sits at the left).
     {
+        // Images draw with the current colour's alpha: an "Empty" slot label (55% grey)
+        // painted just before left it translucent and the baked logo showed through.
+        juce::Graphics::ScopedSaveState keep(g);
+        g.setOpacity(1.0f);
         static juce::Image bg   = juce::ImageCache::getFromMemory(BinaryData::background_png,BinaryData::background_pngSize);
         static juce::Image mark = juce::ImageCache::getFromMemory(BinaryData::logo_amari_mark_v2_png,BinaryData::logo_amari_mark_v2_pngSize);
         if (bg.isValid()) {
