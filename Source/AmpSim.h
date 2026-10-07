@@ -31,7 +31,7 @@ class AmpSim
 {
     static constexpr double kPi = 3.14159265358979323846;   // M_PI is not standard (MSVC)
 public:
-    enum Voicing { Clean = 0, Crunch, HighGain, CleanV2, CleanV3 };   // order = built-in amp index
+    enum Voicing { Clean = 0, Crunch, HighGain, CleanV2, CleanV3, Crunch2, Crunch3 };   // order = built-in amp index
 
     void prepare (double sampleRate)
     {
@@ -51,7 +51,7 @@ public:
     {
         upA.reset(); upB.reset(); dnA.reset(); dnB.reset();
         dcb1.reset(); dcb2.reset(); dcb3.reset();
-        inHPF.reset(); interHPF.reset(); bright.reset();
+        inHPF.reset(); interHPF.reset(); bright.reset(); preLo.reset();
         loSh.reset(); midPk.reset(); hiSh.reset(); pres.reset();
         punch.reset(); air.reset();
         env = 0.0;
@@ -156,6 +156,8 @@ private:
         double input_hpf, bright, bright_amt, pre_min, pre_max, stages, bias, asym;
         double interstage_hpf, power_k, comp, bass_range, mid_range, mid_bias,
                mid_freq, treble_range, air_freq, air_db, punch_freq, punch_db, out_trim;
+        // capture-matched voicings (v1.1): bass shelf at 250 Hz before the clip, fixed 2nd-stage gain
+        double pre_lo_db = 0, stage2_k = 0;
     };
     static Prof profile (Voicing v)
     {
@@ -163,8 +165,14 @@ private:
         {
             case Clean:    return { 70, 1500, 5.0, 1.0, 6.0, 1.0, 0.0, 0.05,
                                     0,   1.1, 0.0,  12, 10, 0.0, 650, 12, 7000, 3.5, 0, 0.0, 0.9 };
-            case Crunch:   return { 90, 900, 1.0, 3.0, 18.0, 1.5, 0.15, 0.25,
-                                    140, 1.6, 0.07, 12, 12, 2.0, 700, 12, 0, 0.0, 110, 3.5, 0.6 };
+            // Crunch v1-v3: matched to Hope's Crunch_V1/V2/V3 captures (same DI), tone lives in Eclipse 2x12 v1-v3.
+            // GAIN knob at its default (4.2) gives the fitted drive; range 0.4x-1.83x. Trims: all three at the same loudness.
+            case Crunch:   return { 128.2, 2200, 0.0, 15.92, 72.79, 1.0, 0.134, 0.199,
+                                    0,   1.3, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 1.0,  -8.21, 0 };
+            case Crunch2:  return { 98.3, 2200, 0.0, 3.570, 16.33, 1.5, 0.118, 0.189,
+                                    98.3, 1.3, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 1.318, -7.46, 3.351 };
+            case Crunch3:  return { 94.6, 2200, 12.0, 19.92, 91.09, 1.0, 0.045, 0.468,
+                                    0,   1.3, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 0.923, -3.97, 0 };
             case CleanV2:  // matched to Hope's "Clean V2" capture: light drive, slight asymmetry (tone lives in Eclipse 1x12 v2)
                            return { 40, 1500, 0.0, 0.2, 0.914, 1.0, 0.0, 0.20,
                                     0,   1.0, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 25.2 };   // trim: same loudness as Clean v1
@@ -180,13 +188,14 @@ private:
     {
         p = profile (voicing);
         drive  = p.pre_min + (p.pre_max - p.pre_min) * pGain;
-        drive2 = drive * (p.stages == 1.5 ? 0.5 : 0.8);
+        drive2 = p.stage2_k > 0 ? p.stage2_k : drive * (p.stages == 1.5 ? 0.5 : 0.8);
         bias2  = p.bias * 0.5;  asym2 = p.asym * 0.5;
         tb1 = std::tanh (p.bias);  tb2 = std::tanh (bias2);
 
         inHPF.setHighpass (fs, p.input_hpf, 0.7071);
         if (p.interstage_hpf > 0) interHPF.setHighpass (fs, p.interstage_hpf, 0.7071);
         bright.setShelf (fs, p.bright, p.bright_amt, true);
+        preLo.setShelf  (fs, 250.0, p.pre_lo_db, false);
 
         loSh.setShelf   (fs, 120.0, (pBass - 0.5) * p.bass_range, false);
         midPk.setPeaking (fs, p.mid_freq, (pMid - 0.5) * p.mid_range + p.mid_bias, 0.7);
@@ -201,6 +210,7 @@ private:
     {
         double x = dcb1.process (in);
         x = inHPF.process (x);
+        if (p.pre_lo_db != 0.0) x = preLo.process (x);
         x = bright.process (x);
         x = std::tanh (drive * x + p.bias + p.asym * std::max (x, 0.0)) - tb1;   // stage 1
         x = dcb2.process (x);
@@ -229,7 +239,7 @@ private:
     float  pGain = 0.5f, pBass = 0.5f, pMid = 0.5f, pTreb = 0.5f, pPres = 0.5f, pMast = 0.7f;
     Voicing voicing = Clean;
     Prof p {};
-    Biquad upA, upB, dnA, dnB, inHPF, interHPF, bright, loSh, midPk, hiSh, pres, punch, air;
+    Biquad upA, upB, dnA, dnB, inHPF, interHPF, bright, preLo, loSh, midPk, hiSh, pres, punch, air;
     DCBlock dcb1, dcb2, dcb3;
     std::vector<float> os;
 };

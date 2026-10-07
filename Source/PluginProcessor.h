@@ -63,10 +63,10 @@ public:
     // A model/IR is identified by a "ref": "builtin:amp/clean", "builtin:cab/4x12",
     // "library:Models/Some Amp.nam" (relative to the library folder, so presets
     // work on Windows and Mac alike) or an absolute file path.
-    static constexpr int kNumBuiltinAmps = 5, kNumBuiltinCabs = 5;
+    static constexpr int kNumBuiltinAmps = 7, kNumBuiltinCabs = 7;
     // Menu order (indices stay fixed so saved presets keep working): cleans first, then crunch, lead
-    static constexpr int kAmpMenuOrder[kNumBuiltinAmps] = { 0, 3, 4, 1, 2 };
-    static constexpr int kCabMenuOrder[kNumBuiltinCabs] = { 0, 3, 4, 1, 2 };
+    static constexpr int kAmpMenuOrder[kNumBuiltinAmps] = { 0, 3, 4, 1, 5, 6, 2 };
+    static constexpr int kCabMenuOrder[kNumBuiltinCabs] = { 0, 3, 4, 1, 5, 6, 2 };
     static juce::String builtinAmpName(int i);
     static juce::String builtinCabName(int i);
     static juce::String builtinAmpRef(int i);
