@@ -140,6 +140,19 @@ private:
     void updateDualUI();                              // show/hide the 1-2 + MIX row
     void exportScene(int slot);                        // write one slot to a .aetone file
     void importScene(int slot);                        // read one slot from a .aetone file
+    void exportBank(int bank);                         // write a bank's 4 slots to a .aebank file
+    void importBank(int bank);                         // read a .aebank into a bank (asks before replacing)
+    juce::String bankXml(int bank) const;
+    juce::String toneXml(int slot) const;
+    bool importToneFile(const juce::File& f, int slot);
+    int  importBankFile(const juce::File& f, int bank); // number of presets imported, -1 = not a bank
+    juce::String occupiedList(int bank, const juce::File& bankFile) const;
+    void showExportMenu();
+    void addToLibrary(bool ir);                        // copy .nam/.aecap or .wav files into the library
+    void removeFromLibrary(const juce::File& f);       // move a library file to <library>/Removed
+    std::shared_ptr<juce::Array<juce::File>> removeCandidates;
+    void showImportMenu();
+    void confirmReplace(const juce::String& title, const juce::String& msg, std::function<void()> fn);
     void resetToDefault();
     void deleteScene(int slot);
     void renameScene(int slot);
@@ -236,8 +249,9 @@ private:
     // Header preset nav + save
     juce::ToggleButton presetPrev, presetNext;
     juce::TextButton headerSave{"SAVE"};
+    juce::TextButton headerExport{"EXPORT"}, headerImport{"IMPORT"};
 
-    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR,chooserExport,chooserImport,chooserOD;
+    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR,chooserExport,chooserImport,chooserOD,chooserLib;
     juce::TooltipWindow tooltipWin{this, 600};
     static const juce::String kChainLabels[9];
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseEditor)

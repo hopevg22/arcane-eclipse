@@ -750,7 +750,9 @@ juce::File ArcaneEclipseProcessor::resolveRef(const juce::String& ref)
     const auto name = ref.fromLastOccurrenceOf("/", false, false).fromLastOccurrenceOf("\\", false, false);
     if (name.isNotEmpty() && root.isDirectory())
         for (const auto& e : juce::RangedDirectoryIterator(root, true, "*", juce::File::findFiles))
-            if (e.getFile().getFileName().equalsIgnoreCase(name)) return e.getFile();
+            if (e.getFile().getFileName().equalsIgnoreCase(name)
+                && ! e.getFile().isAChildOf(root.getChildFile("Removed")))      // removed = gone until restored
+                return e.getFile();
     return {};
 }
 

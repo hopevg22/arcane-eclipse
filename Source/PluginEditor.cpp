@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include <BinaryData.h>
 #include <cmath>
+#include <map>
 
 static const juce::Colour kPurple{0xff9B59FF};
 static const juce::Colour kPurDim{0xff7040cc};
@@ -526,6 +527,13 @@ ArcaneEclipseEditor::ArcaneEclipseEditor(ArcaneEclipseProcessor& p)
             });
     };
 
+    // EXPORT / IMPORT next to SAVE: one preset or a whole bank
+    for(auto* b:{&headerExport,&headerImport}){ makeHotspot(*b,5.f); addAndMakeVisible(*b); }
+    headerExport.setTooltip("Export this preset or the whole bank, to share or back up");
+    headerImport.setTooltip("Import a tone (.aetone) or a bank (.aebank)");
+    headerExport.onClick=[this]{ showExportMenu(); };
+    headerImport.onClick=[this]{ showImportMenu(); };
+
     // ? icon -> credits panel
     addAndMakeVisible(creditsPanel);
     creditsPanel.setVisible(false);
@@ -975,8 +983,9 @@ void ArcaneEclipseEditor::updateDualUI(){
     if(matchBtn.isVisible()!=on) matchBtn.setVisible(on);
 }
 
-// ── Per-slot export / import (.aetone = a single-slot preset file) ──────────────
-// v1.1: the tone carries its amp model, IR and pedal capture files inside it
+// ── Export / import ─────────────────────────────────────────────────────────────
+// .aetone = one preset slot; .aebank = the 4 slots of a bank.
+// The amp models, IRs and pedal captures a preset uses travel inside the file
 // (base64), so it sounds the same on someone else's computer. Built-in amps and
 // cabinets are stored by name only - every copy of the plugin has them.
 static const char* const kToneKeys[] = { "nam", "ir", "nam2", "ir2", "od" };
@@ -987,18 +996,28 @@ static juce::File importedToneDir(){
     return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
              .getChildFile("Amari Labs").getChildFile("Arcane Eclipse").getChildFile("Imported");
 }
+static juce::File exportStartDir(){
+    auto d=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+             .getChildFile("Amari Labs").getChildFile("Arcane Eclipse").getChildFile("Tones");
+    d.createDirectory();
+    return d.isDirectory() ? d : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+}
 
-void ArcaneEclipseEditor::exportScene(int slot){
-    if(slot<0 || slot>=kNumScenes || scenes[slot].isEmpty()) return;
-    SceneData sc=scenes[slot];
+// One slot as a tree: name, model/IR refs and knob settings (files go in FILES).
+static juce::ValueTree toneTree(const SceneData& sc){
+    SceneData c=sc;
     juce::ValueTree t("AETONE");
     t.setProperty("version", 2, nullptr);
-    t.setProperty("name", sc.name, nullptr);
-    juce::ValueTree files("FILES");
-    juce::StringArray packed;                                  // a file used twice is packed once
+    t.setProperty("name", c.name, nullptr);
+    for(int k=0;k<5;++k) t.setProperty(kToneKeys[k], sceneRef(c,k), nullptr);
+    if(c.params.isValid()) t.appendChild(c.params.createCopy(), nullptr);
+    return t;
+}
+// Pack the files a slot uses into `files` (a file used twice is packed once).
+static void packFiles(const SceneData& sc, juce::ValueTree& files, juce::StringArray& packed){
+    SceneData c=sc;
     for(int k=0;k<5;++k){
-        const auto ref=sceneRef(sc,k);
-        t.setProperty(kToneKeys[k], ref, nullptr);
+        const auto ref=sceneRef(c,k);
         if(ref.isEmpty() || ArcaneEclipseProcessor::isBuiltinRef(ref) || packed.contains(ref)) continue;
         auto f=ArcaneEclipseProcessor::resolveRef(ref);
         if(! f.existsAsFile() || f.getSize() > 64LL*1024*1024) continue;
@@ -1010,58 +1029,204 @@ void ArcaneEclipseEditor::exportScene(int slot){
         files.appendChild(e, nullptr);
         packed.add(ref);
     }
-    if(files.getNumChildren()>0) t.appendChild(files, nullptr);
-    if(sc.params.isValid()) t.appendChild(sc.params.createCopy(), nullptr);
-    auto xml = t.toXmlString();
+}
+// Unpack FILES to disk. Returns old ref -> ref on this computer. A file this
+// computer already has (same name and size, e.g. from the Amari Library) is reused.
+static std::map<juce::String,juce::String> unpackFiles(const juce::ValueTree& files){
+    std::map<juce::String,juce::String> remap;
+    for(int i=0;i<files.getNumChildren();++i){
+        auto e=files.getChild(i);
+        const juce::String ref=e["ref"].toString(), name=juce::File::createLegalFileName(e["name"].toString());
+        juce::MemoryBlock mb; if(name.isEmpty() || ! mb.fromBase64Encoding(e["data"].toString())) continue;
+        juce::File use=ArcaneEclipseProcessor::resolveRef(ref);
+        if(! (use.existsAsFile() && use.getSize()==(juce::int64) mb.getSize())){
+            auto lib=ArcaneEclipseProcessor::libraryRoot().getChildFile(name.endsWithIgnoreCase(".wav") ? "IRs" : "Models").getChildFile(name);
+            if(lib.existsAsFile() && lib.getSize()==(juce::int64) mb.getSize()) use=lib;
+            else {
+                auto dir=importedToneDir(); dir.createDirectory();
+                use=dir.getChildFile(name);
+                if(use.existsAsFile()){
+                    juce::MemoryBlock old; use.loadFileAsData(old);
+                    if(old!=mb) use=use.getNonexistentSibling(false);
+                }
+                if(! use.existsAsFile() && ! use.replaceWithData(mb.getData(), mb.getSize())) continue;
+            }
+        }
+        remap[ref]=ArcaneEclipseProcessor::refForFile(use);
+    }
+    return remap;
+}
+static SceneData sceneFromTree(const juce::ValueTree& t, const std::map<juce::String,juce::String>& remap,
+                               const juce::String& fallbackName){
+    SceneData sc;
+    sc.name = stripSlotPrefix(t.getProperty("name", fallbackName).toString());
+    if(sc.name.isEmpty() || sc.name=="Empty") sc.name = fallbackName;
+    for(int k=0;k<5;++k){
+        auto r=t.getProperty(kToneKeys[k], "").toString();
+        auto it=remap.find(r); sceneRef(sc,k) = (it!=remap.end()) ? it->second : r;
+    }
+    for(int c=0;c<t.getNumChildren();++c)
+        if(! t.getChild(c).hasType("FILES")){ sc.params = t.getChild(c).createCopy(); break; }
+    return sc;
+}
+static juce::ValueTree readTree(const juce::File& f){
+    if(! f.existsAsFile() || f.getSize() > 512LL*1024*1024) return {};
+    auto xml=juce::XmlDocument::parse(f);
+    return xml ? juce::ValueTree::fromXml(*xml) : juce::ValueTree();
+}
+
+void ArcaneEclipseEditor::confirmReplace(const juce::String& title, const juce::String& msg, std::function<void()> fn){
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    juce::AlertWindow::showOkCancelBox(juce::MessageBoxIconType::QuestionIcon, title, msg, "Replace", "Cancel", this,
+        juce::ModalCallbackFunction::create([safe,fn](int r){ if(r==1 && safe!=nullptr) fn(); }));
+}
+
+void ArcaneEclipseEditor::exportScene(int slot){
+    if(slot<0 || slot>=kNumScenes || scenes[slot].isEmpty()) return;
+    auto xml = toneXml(slot);
     chooserExport=std::make_unique<juce::FileChooser>("Export Tone",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-            .getChildFile(juce::File::createLegalFileName(sc.name) + ".aetone"), "*.aetone");
+        exportStartDir().getChildFile(juce::File::createLegalFileName(scenes[slot].name) + ".aetone"), "*.aetone");
     chooserExport->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
                                juce::FileBrowserComponent::warnAboutOverwriting,
         [xml](const juce::FileChooser& fc){ auto r=fc.getResult();
             if(r != juce::File()) r.withFileExtension(".aetone").replaceWithText(xml); });
 }
 
+juce::String ArcaneEclipseEditor::toneXml(int slot) const {
+    auto t=toneTree(scenes[slot]);
+    juce::ValueTree files("FILES"); juce::StringArray packed;
+    packFiles(scenes[slot], files, packed);
+    if(files.getNumChildren()>0) t.appendChild(files, nullptr);
+    return t.toXmlString();
+}
+
+juce::String ArcaneEclipseEditor::bankXml(int bank) const {
+    juce::ValueTree b("AEBANK");
+    b.setProperty("version", 1, nullptr);
+    b.setProperty("name", "Bank " + juce::String(bank+1), nullptr);
+    juce::ValueTree files("FILES"); juce::StringArray packed;
+    for(int s=0;s<kSlotsPerBank;++s){
+        const int idx=bank*kSlotsPerBank+s;
+        if(idx>=kNumScenes || scenes[idx].isEmpty()) continue;
+        auto t=toneTree(scenes[idx]);
+        t.setProperty("slot", s, nullptr);
+        b.appendChild(t, nullptr);
+        packFiles(scenes[idx], files, packed);
+    }
+    if(files.getNumChildren()>0) b.appendChild(files, nullptr);
+    return b.toXmlString();
+}
+
+void ArcaneEclipseEditor::exportBank(int bank){
+    if(bank<0 || bank>=kNumBanks) return;
+    auto xml=bankXml(bank);
+    chooserExport=std::make_unique<juce::FileChooser>("Export Bank",
+        exportStartDir().getChildFile("Arcane Eclipse - Bank " + juce::String(bank+1) + ".aebank"), "*.aebank");
+    chooserExport->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
+                               juce::FileBrowserComponent::warnAboutOverwriting,
+        [xml](const juce::FileChooser& fc){ auto r=fc.getResult();
+            if(r != juce::File()) r.withFileExtension(".aebank").replaceWithText(xml); });
+}
+
+bool ArcaneEclipseEditor::importToneFile(const juce::File& f, int slot){
+    auto t=readTree(f);
+    if(slot<0 || slot>=kNumScenes || !t.isValid() || !t.hasType("AETONE")) return false;
+    auto remap=unpackFiles(t.getChildWithName("FILES"));
+    scenes[slot]=sceneFromTree(t, remap, slotCode(slot));
+    savePresets(); loadScene(slot); currentBank=slot/kSlotsPerBank; refreshSceneButtons(); repaint();
+    return true;
+}
+
+int ArcaneEclipseEditor::importBankFile(const juce::File& f, int bank){
+    auto b=readTree(f);
+    if(bank<0 || bank>=kNumBanks || !b.isValid() || !b.hasType("AEBANK")) return -1;
+    auto remap=unpackFiles(b.getChildWithName("FILES"));
+    int n=0, first=-1;
+    for(int i=0;i<b.getNumChildren();++i){
+        auto t=b.getChild(i);
+        if(! t.hasType("AETONE")) continue;
+        const int s=(int) t.getProperty("slot", -1);
+        if(s<0 || s>=kSlotsPerBank) continue;
+        const int idx=bank*kSlotsPerBank+s;
+        scenes[idx]=sceneFromTree(t, remap, slotCode(idx));
+        if(first<0) first=idx;
+        ++n;
+    }
+    if(n>0){ savePresets(); currentBank=bank; loadScene(first); refreshSceneButtons(); repaint(); }
+    return n;
+}
+
+// Which occupied slots an import would replace ("1A Lead the Way, 1C Clean Spirit")
+juce::String ArcaneEclipseEditor::occupiedList(int bank, const juce::File& bankFile) const {
+    juce::StringArray hit;
+    auto b=readTree(bankFile);
+    for(int i=0;i<b.getNumChildren();++i){
+        auto t=b.getChild(i); if(! t.hasType("AETONE")) continue;
+        const int s=(int) t.getProperty("slot", -1); if(s<0 || s>=kSlotsPerBank) continue;
+        const int idx=bank*kSlotsPerBank+s;
+        if(! scenes[idx].isEmpty()) hit.add(slotCode(idx) + " " + scenes[idx].name);
+    }
+    return hit.joinIntoString(", ");
+}
+
 void ArcaneEclipseEditor::importScene(int slot){
     if(slot<0 || slot>=kNumScenes) return;
-    chooserImport=std::make_unique<juce::FileChooser>("Import Tone",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.aetone");
+    chooserImport=std::make_unique<juce::FileChooser>("Import Tone", exportStartDir(), "*.aetone");
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
     chooserImport->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-        [this,slot](const juce::FileChooser& fc){ auto r=fc.getResult();
-            if(r == juce::File() || !r.existsAsFile()) return;
-            auto xml = juce::XmlDocument::parse(r);
-            if(xml==nullptr) return;
-            auto t = juce::ValueTree::fromXml(*xml);
-            if(!t.isValid() || !t.hasType("AETONE")) return;
-            SceneData sc;
-            sc.name = stripSlotPrefix(t.getProperty("name", slotCode(slot)).toString());
-            if(sc.name.isEmpty() || sc.name=="Empty") sc.name = slotCode(slot);
-            for(int k=0;k<5;++k) sceneRef(sc,k) = t.getProperty(kToneKeys[k], "").toString();
-            // Unpack the files that came with the tone. A file this computer already
-            // has (same name and size, e.g. from the Amari Library) is used as it is.
-            auto files=t.getChildWithName("FILES");
-            for(int i=0;i<files.getNumChildren();++i){
-                auto e=files.getChild(i);
-                const juce::String ref=e["ref"].toString(), name=juce::File::createLegalFileName(e["name"].toString());
-                juce::MemoryBlock mb; if(name.isEmpty() || ! mb.fromBase64Encoding(e["data"].toString())) continue;
-                juce::File use=ArcaneEclipseProcessor::resolveRef(ref);
-                if(! (use.existsAsFile() && use.getSize()==(juce::int64) mb.getSize())){
-                    auto dir=importedToneDir(); dir.createDirectory();
-                    use=dir.getChildFile(name);
-                    if(use.existsAsFile()){
-                        juce::MemoryBlock old; use.loadFileAsData(old);
-                        if(old!=mb) use=use.getNonexistentSibling(false);
-                    }
-                    if(! use.existsAsFile() && ! use.replaceWithData(mb.getData(), mb.getSize())) continue;
-                }
-                const auto newRef=ArcaneEclipseProcessor::refForFile(use);
-                for(int k=0;k<5;++k) if(sceneRef(sc,k)==ref) sceneRef(sc,k)=newRef;
-            }
-            for(int c=0;c<t.getNumChildren();++c)
-                if(! t.getChild(c).hasType("FILES")){ sc.params = t.getChild(c).createCopy(); break; }
-            scenes[slot]=sc;
-            savePresets(); loadScene(slot); refreshSceneButtons(); repaint();
+        [safe,slot](const juce::FileChooser& fc){
+            auto r=fc.getResult(); if(safe==nullptr || r==juce::File()) return;
+            auto go=[safe,r,slot]{ if(safe!=nullptr && ! safe->importToneFile(r,slot))
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Import Tone","That file isn't an Arcane Eclipse tone (.aetone)."); };
+            if(safe->scenes[slot].isEmpty()) go();
+            else safe->confirmReplace("Import Tone", "Replace " + slotCode(slot) + " " + safe->scenes[slot].name + " with this tone?", go);
         });
+}
+
+void ArcaneEclipseEditor::importBank(int bank){
+    if(bank<0 || bank>=kNumBanks) return;
+    chooserImport=std::make_unique<juce::FileChooser>("Import Bank", exportStartDir(), "*.aebank");
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    chooserImport->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+        [safe,bank](const juce::FileChooser& fc){
+            auto r=fc.getResult(); if(safe==nullptr || r==juce::File()) return;
+            auto go=[safe,r,bank]{ if(safe!=nullptr && safe->importBankFile(r,bank) <= 0)
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Import Bank","That file isn't an Arcane Eclipse bank (.aebank), or it has no presets."); };
+            auto busy=safe->occupiedList(bank, r);
+            if(busy.isEmpty()) go();
+            else safe->confirmReplace("Import Bank", "Bank " + juce::String(bank+1) + " already has presets that this bank will replace:\n\n" + busy, go);
+        });
+}
+
+void ArcaneEclipseEditor::showExportMenu(){
+    juce::PopupMenu m;
+    const bool haveActive = activeScene>=0 && activeScene<kNumScenes && !scenes[activeScene].isEmpty();
+    bool bankHas=false;
+    for(int s=0;s<kSlotsPerBank;++s) if(!scenes[currentBank*kSlotsPerBank+s].isEmpty()) bankHas=true;
+    m.addItem(1, haveActive ? "This preset  (" + slotCode(activeScene) + " " + scenes[activeScene].name + ")..."
+                            : juce::String("This preset (load a preset first)"), haveActive);
+    m.addItem(2, "Whole bank " + juce::String(currentBank+1) + "  (4 slots)...", bankHas);
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&headerExport),
+        [safe](int r){ if(safe==nullptr) return;
+            if(r==1) safe->exportScene(safe->activeScene);
+            else if(r==2) safe->exportBank(safe->currentBank); });
+}
+
+void ArcaneEclipseEditor::showImportMenu(){
+    juce::PopupMenu m;
+    m.addSectionHeader("Import a tone (.aetone) into:");
+    for(int s=0;s<kSlotsPerBank;++s){
+        const int idx=currentBank*kSlotsPerBank+s;
+        m.addItem(10+idx, slotCode(idx) + (scenes[idx].isEmpty() ? juce::String("  (empty)") : "  " + scenes[idx].name));
+    }
+    m.addSeparator();
+    m.addItem(2, "Import a bank (.aebank) into Bank " + juce::String(currentBank+1) + "...");
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&headerImport),
+        [safe](int r){ if(safe==nullptr) return;
+            if(r>=10) safe->importScene(r-10);
+            else if(r==2) safe->importBank(safe->currentBank); });
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────────
@@ -1143,6 +1308,8 @@ void ArcaneEclipseEditor::resized()
     presetPrev.setBounds(RR(545,12,592,54));
     presetNext.setBounds(RR(870,12,917,54));
     headerSave.setBounds(RR(938,13,1017,50));
+    headerExport.setBounds(RR(1029,13,1113,50));
+    headerImport.setBounds(RR(1121,13,1205,50));
     tbTuner   .setBounds(RR(1325,13,1361,50));
     if(helpBtn) helpBtn->setBounds(RR(1418,13,1454,50));   // resized() first runs from setSize(), before helpBtn exists
 
@@ -1151,7 +1318,7 @@ void ArcaneEclipseEditor::resized()
     // header icons: power (bypass) and [ ] (A/B)
     powerBtn.setBounds(RR(1464,13,1500,50));
     abBtn   .setBounds(RR(1372,13,1408,50));
-    trialBtn.setBounds(RR(1108,17,1306,46));
+    trialBtn.setBounds(RR(330,17,528,46));
     if (activationDialog) activationDialog->setBounds(getLocalBounds());
     if (splash) splash->setBounds(getLocalBounds());
     // dual level faders + MATCH inside the speaker grille
@@ -1289,10 +1456,33 @@ void ArcaneEclipseEditor::paintHeaderLive(juce::Graphics& g)
         }
     }
 
+    // EXPORT / IMPORT: outline buttons beside the solid SAVE
+    for(int i=0;i<2;++i){
+        auto& btn = i==0 ? headerExport : headerImport;
+        auto r = (i==0 ? RF(1029,13,1113,50) : RF(1121,13,1205,50)).reduced(1.f);
+        const bool hot = btn.isMouseOver() || btn.isDown();
+        g.setColour(juce::Colour(0xff17141f)); g.fillRoundedRectangle(r, SX(7.f));
+        g.setColour(kPurple.withAlpha(hot ? 0.30f : 0.12f)); g.fillRoundedRectangle(r, SX(7.f));
+        g.setColour(kPurple.withAlpha(hot ? 1.f : 0.75f)); g.drawRoundedRectangle(r.reduced(0.6f), SX(7.f), 1.4f);
+        // tray + arrow: up and out for export, down and in for import
+        const float ix=r.getX()+SX(16.f), cy=r.getCentreY(), w=SX(10.f), h=SY(11.f);
+        juce::Path tray; tray.startNewSubPath(ix-w*0.5f, cy+h*0.15f); tray.lineTo(ix-w*0.5f, cy+h*0.5f);
+        tray.lineTo(ix+w*0.5f, cy+h*0.5f); tray.lineTo(ix+w*0.5f, cy+h*0.15f);
+        juce::Path arr;
+        if(i==0){ arr.startNewSubPath(ix, cy+h*0.25f); arr.lineTo(ix, cy-h*0.5f);
+                  arr.startNewSubPath(ix-w*0.3f, cy-h*0.2f); arr.lineTo(ix, cy-h*0.5f); arr.lineTo(ix+w*0.3f, cy-h*0.2f); }
+        else    { arr.startNewSubPath(ix, cy-h*0.5f); arr.lineTo(ix, cy+h*0.25f);
+                  arr.startNewSubPath(ix-w*0.3f, cy-h*0.05f); arr.lineTo(ix, cy+h*0.25f); arr.lineTo(ix+w*0.3f, cy-h*0.05f); }
+        g.setColour(kText); juce::PathStrokeType st(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        g.strokePath(tray, st); g.strokePath(arr, st);
+        haloText(g, i==0 ? "EXPORT" : "IMPORT", juce::Font(SY(13.f)).boldened(), kText,
+                 r.withTrimmedLeft(SX(26.f)).toNearestInt(), juce::Justification::centred);
+    }
+
     // Free-trial pill: "TRIAL · N DAYS LEFT" (click opens buy / activate)
     if (licAccess == AEAccess::TrialActive)
     {
-        auto pill = RF(1108,17,1306,46);
+        auto pill = RF(330,17,528,46);
         const int left = AELicenseManager::getInstance().trialDaysLeft();
         const bool urgent = left <= 2;
         auto acc = urgent ? juce::Colour(0xffff8a5c) : kPurple;
@@ -1557,6 +1747,59 @@ static void addLibraryItems(juce::PopupMenu& m, const juce::File& dir, const juc
     }
 }
 
+// ── Amari Library: add files to it, or move them out to the Removed folder ─────
+void ArcaneEclipseEditor::addToLibrary(bool ir){
+    auto libDir=ArcaneEclipseProcessor::libraryRoot().getChildFile(ir ? "IRs" : "Models");
+    chooserLib=std::make_unique<juce::FileChooser>(ir ? "Add IRs to the library" : "Add amp models to the library",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), ir ? "*.wav" : "*.nam;*.aecap");
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    const int a=editSlot();
+    chooserLib->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles|
+                            juce::FileBrowserComponent::canSelectMultipleItems,
+        [safe,libDir,ir,a](const juce::FileChooser& fc){
+            if(safe==nullptr) return;
+            auto picked=fc.getResults(); if(picked.isEmpty()) return;
+            libDir.createDirectory();
+            juce::StringArray failed; juce::File firstAdded;
+            for(auto& f:picked){
+                if(f.isAChildOf(libDir)){ if(firstAdded==juce::File()) firstAdded=f; continue; }   // already in it
+                auto dst=libDir.getChildFile(f.getFileName());
+                if(dst.existsAsFile() && dst.getSize()==f.getSize()){ if(firstAdded==juce::File()) firstAdded=dst; continue; }
+                if(dst.existsAsFile()) dst=dst.getNonexistentSibling(false);
+                if(f.copyFileTo(dst)){ if(firstAdded==juce::File()) firstAdded=dst; }
+                else failed.add(f.getFileName());
+            }
+            if(firstAdded.existsAsFile()){             // load the first one so they hear it right away
+                if(ir) safe->proc.loadIR(firstAdded,a); else safe->loadModelFile(firstAdded);
+                safe->repaint();
+            }
+            if(! failed.isEmpty())
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Add to library",
+                    "Couldn't copy into the library folder:\n" + failed.joinIntoString("\n")
+                    + "\n\nThe folder is:\n" + libDir.getFullPathName());
+        });
+}
+
+void ArcaneEclipseEditor::removeFromLibrary(const juce::File& f){
+    const auto root=ArcaneEclipseProcessor::libraryRoot();
+    if(! f.existsAsFile() || ! f.isAChildOf(root)) return;
+    juce::Component::SafePointer<ArcaneEclipseEditor> safe(this);
+    const juce::String nm=f.getFileNameWithoutExtension();
+    juce::AlertWindow::showOkCancelBox(juce::MessageBoxIconType::QuestionIcon, "Remove from library",
+        "Remove \"" + nm + "\" from the library?\n\nIt moves to the Removed folder inside the library, so you can put it back later. "
+        "Presets that use it will show it as missing until you do.", "Remove", "Cancel", this,
+        juce::ModalCallbackFunction::create([safe,f,root](int r){
+            if(r!=1 || safe==nullptr) return;
+            auto dst=root.getChildFile("Removed").getChildFile(f.getRelativePathFrom(root));
+            dst.getParentDirectory().createDirectory();
+            if(dst.existsAsFile()) dst=dst.getNonexistentSibling(false);
+            if(! f.moveFileTo(dst))
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Remove from library",
+                    "Couldn't move the file. You can remove it yourself from:\n" + f.getParentDirectory().getFullPathName());
+            if(safe!=nullptr) safe->repaint();
+        }));
+}
+
 void ArcaneEclipseEditor::showFieldMenu(bool ir)
 {
     using P=ArcaneEclipseProcessor;
@@ -1581,6 +1824,15 @@ void ArcaneEclipseEditor::showFieldMenu(bool ir)
     if(m.getNumItems()==before) m.addItem(4, "(library folder is empty)", false);
     m.addSeparator();
     m.addItem(1, (ir ? "Load IR from file..." : "Load model from file...") + who);
+    m.addItem(5, "Add to library...");
+    {   // Remove from library: lists the library's files; the file moves to the Removed folder
+        juce::PopupMenu rm; auto rmFiles=std::make_shared<juce::Array<juce::File>>();
+        juce::Array<juce::File> tmp; juce::PopupMenu scratch;
+        addLibraryItems(scratch, libDir, ir ? "*.wav" : "*.nam;*.aecap", tmp, {});
+        for(auto& f:tmp){ rmFiles->add(f); rm.addItem(3000+rmFiles->size()-1, f.getFileNameWithoutExtension()); }
+        m.addSubMenu("Remove from library", rm, ! tmp.isEmpty());
+        removeCandidates=rmFiles;
+    }
     m.addItem(3, "Open library folder");
     m.addItem(2, ir ? "No cab (bypass)" : "Clear model", loaded);
 
@@ -1595,6 +1847,9 @@ void ArcaneEclipseEditor::showFieldMenu(bool ir)
                 else juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Arcane Eclipse",
                         "The library folder is:\n" + libDir.getFullPathName());
             }
+            else if(r==5){ addToLibrary(ir); return; }
+            else if(r>=3000 && removeCandidates!=nullptr && r-3000<removeCandidates->size()){
+                removeFromLibrary((*removeCandidates)[r-3000]); return; }
             else if(r>=100 && r<1000){ if(ir) proc.loadBuiltinCab(r-100,a); else proc.loadBuiltinAmp(r-100,a); }
             else if(r>=1000 && r-1000<files->size()){
                 auto f=(*files)[r-1000];
