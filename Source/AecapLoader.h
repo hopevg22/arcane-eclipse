@@ -23,7 +23,13 @@
 // ==========================================================================
 //  SECRET KEY -- keep identical to the Python packer; keep out of public repos.
 // ==========================================================================
-static const char* const kAecapSecretKey = "AMARI-LABS-AECAP-v1-REPLACE-ME";
+// The real key is NOT stored in this (public) repo. CI injects it at build time
+// from the AECAP_SECRET_KEY GitHub Actions secret (see CMakeLists.txt). It must
+// match SECRET_KEY in tools/aecap_common.py (kept private).
+#ifndef AECAP_SECRET_KEY
+ #define AECAP_SECRET_KEY "AMARI-LABS-AECAP-v1-REPLACE-ME"
+#endif
+static const char* const kAecapSecretKey = AECAP_SECRET_KEY;
 
 // ==========================================================================
 class AecapLoader

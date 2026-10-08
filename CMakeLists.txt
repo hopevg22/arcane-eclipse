@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ArcaneEclipse VERSION 1.0.2)
+project(ArcaneEclipse VERSION 1.1.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,8 @@ target_sources(ArcaneEclipse PRIVATE
     Source/Modulation.h
     Source/RoomReverb.h
     Source/StandardDelay.h
+    Source/Doubler.h
+    Source/AecapLoader.h
 )
 
 target_compile_definitions(ArcaneEclipse PUBLIC
@@ -83,27 +85,29 @@ else()
     message(STATUS "ASIO SDK not provided - building without ASIO")
 endif()
 
+# .aecap secret key: injected from the environment (GitHub Actions secret
+# AECAP_SECRET_KEY) so it never lives in this public repo.
+if(NOT "$ENV{AECAP_SECRET_KEY}" STREQUAL "")
+    target_compile_definitions(ArcaneEclipse PRIVATE AECAP_SECRET_KEY="$ENV{AECAP_SECRET_KEY}")
+    message(STATUS "AECAP secret key: provided via environment")
+else()
+    message(STATUS "AECAP secret key: NOT set - .aecap files will not open in this build")
+endif()
+
 juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/background.png
-    Resources/panels/amp.png
-    Resources/panels/fxcard.png
-    Resources/panels/cabinet.png
-    Resources/logo_amari.png
-    Resources/logo_amari_mark_white.png
-    Resources/logo_amari_mark_color.png
-    Resources/knobs/knob_unified.png
-    Resources/knobs/knob_strip.png
-    Resources/knobs/knob_amp.png
-    Resources/knobs/knob_fx.png
-    Resources/icons/00_GATE.png
-    Resources/icons/01_COMP.png
-    Resources/icons/02_DRIVE.png
-    Resources/icons/03_AMP.png
-    Resources/icons/04_CAB.png
-    Resources/icons/05_EQ.png
-    Resources/icons/06_MOD.png
-    Resources/icons/07_DELAY.png
-    Resources/icons/08_REVERB.png)
+    Resources/knobs/knob_v11.png
+    Resources/logo_amari_mark_v2.png
+    Resources/fonts/Cinzel-SemiBold.ttf
+    Resources/cabs/cab_eclipse_1x12.wav
+    Resources/cabs/cab_eclipse_2x12.wav
+    Resources/cabs/cab_eclipse_4x12.wav
+    Resources/cabs/cab_eclipse_1x12_v2.wav
+    Resources/cabs/cab_eclipse_1x12_v3.wav
+    Resources/cabs/cab_eclipse_2x12_v2.wav
+    Resources/cabs/cab_eclipse_2x12_v3.wav
+    Resources/cabs/cab_eclipse_4x12_v2.wav
+    Resources/cabs/cab_eclipse_4x12_v3.wav)
 
 target_link_libraries(ArcaneEclipse PRIVATE
     ArcaneEclipseAssets

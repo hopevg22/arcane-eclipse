@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "AEActivationDialog.h"
+#include "AESplash.h"
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 namespace AEP {
@@ -27,7 +28,10 @@ public:
     void drawLabel(juce::Graphics&,juce::Label&) override;
     void drawButtonBackground(juce::Graphics&,juce::Button&,
                               const juce::Colour&,bool,bool) override;
+    void drawButtonText(juce::Graphics&,juce::TextButton&,bool,bool) override;
     void drawToggleButton(juce::Graphics&,juce::ToggleButton&,bool,bool) override {}
+    void drawLinearSlider(juce::Graphics&,int,int,int,int,float,float,float,
+                          juce::Slider::SliderStyle,juce::Slider&) override;
     void drawComboBox(juce::Graphics&,int,int,bool,int,int,int,int,juce::ComboBox&) override;
     void positionComboBoxText(juce::ComboBox&,juce::Label&) override;
     void drawPopupMenuItem(juce::Graphics&,const juce::Rectangle<int>&,
@@ -50,6 +54,8 @@ struct AEKnob {
 // ── Scene data ────────────────────────────────────────────────────────────────
 struct SceneData {
     juce::String namPath, irPath, name{"Empty"};
+    juce::String namPath2, irPath2;          // v1.1: amp 2 (Dual Amp/IR)
+    juce::String odPath;                     // v1.1.1: overdrive pedal capture
     juce::ValueTree params;
     bool isEmpty() const { return name == "Empty"; }
 };
@@ -93,37 +99,67 @@ public:
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
     bool keyPressed(const juce::KeyPress&) override;
     void resized() override;
 
 private:
     void timerCallback() override;
-    void paintTopBar(juce::Graphics&);
-    void paintStrip(juce::Graphics&);
-    void paintChain(juce::Graphics&);
-    void paintChainNode(juce::Graphics&,int,juce::Rectangle<int>,bool);
-    void paintAmpHead(juce::Graphics&);
-    void paintFXSection(juce::Graphics&);
-    void paintCabSection(juce::Graphics&);
-    void paintSceneBar(juce::Graphics&);
-    void paintFooter(juce::Graphics&);
+    // v1.1 re-skin: the render (background.png) carries all static art; these
+    // paint only the LIVE state on top of it (text, glows, meters, LEDs).
+    void paintHeaderLive(juce::Graphics&);
+    void paintChainLive(juce::Graphics&);
+    void paintPedalsLive(juce::Graphics&);
+    void paintCabLive(juce::Graphics&);
+    void paintScenesLive(juce::Graphics&);
+    void paintFooterLive(juce::Graphics&);
     void paintVU(juce::Graphics&,juce::Rectangle<float>,float);
     void paintTuner(juce::Graphics&);
     void setTunerVisible(bool v);
     juce::Rectangle<int> chainNodeBounds(int i) const;
+    void showTypeMenu(int fx);                 // 0 = MOD, 1 = DELAY, 2 = REVERB
+    juce::String typeName(int fx) const;
+    void showFieldMenu(bool ir);               // MODEL / IR field dropdown
+    void showODMenu();                         // overdrive capture pill
+    void showStereoMenu();                     // footer: mono / stereo / doubler
+    // A/B compare (v1.1.1)
+    SceneData snapshotNow();
+    void applySnapshot(const SceneData& s);
+    void abToggle(); void showABMenu(); void abReset();
+    SceneData abSnap[2]; bool abHas[2] = { false, false }; int abSide = 0;
+    void matchAmpLevels();
+    double matchFlashMs = 0.0; juce::String matchMsg;
 
     void saveScene(int slot);
     void loadScene(int slot);
     void refreshSceneButtons();
     void savePresets(); void loadPresets(); juce::File getPresetsFile();
+    // v1.1: model loading handles .nam and .aecap; per-slot export/import
+    void loadModelFile(const juce::File& f);          // LOAD MODEL -> the amp being edited
+    int  editSlot() const;                            // amp the MODEL/IR controls act on (0/1)
+    void updateDualUI();                              // show/hide the 1-2 + MIX row
+    void exportScene(int slot);                        // write one slot to a .aetone file
+    void importScene(int slot);                        // read one slot from a .aetone file
+    void exportBank(int bank);                         // write a bank's 4 slots to a .aebank file
+    void importBank(int bank);                         // read a .aebank into a bank (asks before replacing)
+    juce::String bankXml(int bank) const;
+    juce::String toneXml(int slot) const;
+    bool importToneFile(const juce::File& f, int slot);
+    int  importBankFile(const juce::File& f, int bank); // number of presets imported, -1 = not a bank
+    juce::String occupiedList(int bank, const juce::File& bankFile) const;
+    void showExportMenu();
+    void addToLibrary(bool ir);                        // copy .nam/.aecap or .wav files into the library
+    void removeFromLibrary(const juce::File& f);       // move a library file to <library>/Removed
+    std::shared_ptr<juce::Array<juce::File>> removeCandidates;
+    void showImportMenu();
+    void confirmReplace(const juce::String& title, const juce::String& msg, std::function<void()> fn);
     void resetToDefault();
     void deleteScene(int slot);
     void renameScene(int slot);
 
     // ── Layout ────────────────────────────────────────────────────────────────
     static constexpr int W=1200,H=823;
-    static constexpr int kTopH=54,kStripH=124,kAmpH=285,kFXH=258,kSceneH=58,kFootH=44;
-    static constexpr int kCabW=346;
+    static constexpr int kTopH=54,kFootH=44;   // tuner screen header/footer bands
 
     ArcaneEclipseProcessor& proc;
     AELAF laf;
@@ -133,8 +169,12 @@ private:
     juce::String tunerNote;
     float tunerCents=0.f;
     int activeScene=-1; int currentBank=0;
-    juce::String curNAMPath, curIRPath;
-    SceneData scenes[20];
+    int editAmp = 0;                                   // v1.1: 0 = amp 1, 1 = amp 2
+    // v1.1: 8 banks x 4 slots = 32 scenes (was 5 banks / 20)
+    static constexpr int kSlotsPerBank = 4;
+    static constexpr int kNumBanks     = 8;
+    static constexpr int kNumScenes    = kNumBanks * kSlotsPerBank;
+    SceneData scenes[kNumScenes];
 
     // Strip knobs
     AEKnob kInput,kGate,kComp,kOutput;
@@ -155,6 +195,16 @@ private:
     juce::String learningID;
     std::unique_ptr<juce::AlertWindow> renameWindow;
     std::unique_ptr<AEActivationDialog> activationDialog;
+    // v1.1 free trial: license gate + header "TRIAL · N DAYS LEFT" pill
+    juce::TextButton trialBtn;
+    AEAccess licAccess = AEAccess::Licensed;
+    int licCheckTick = 0;
+    void showLicenseGate(AEActivationDialog::Mode m);
+    void maybeShowLicenseGate();
+    std::unique_ptr<AESplash> splash;                 // v1.1 startup screen
+    void showSplash();
+    void closeLicenseGate();
+    void updateLicenseState();
     CreditsPanel creditsPanel;
     std::unique_ptr<juce::TextButton> helpBtn;
     void showCredits();
@@ -167,15 +217,31 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attStereo;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         attGate,attComp,attOD,attMod,attDelay,attReverb,attCab;
+    // v1.1: pedal footswitches (second attachment to the same on/off params)
+    juce::ToggleButton fsOD{""}, fsMod{""}, fsDelay{""}, fsReverb{""};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        attFsOD,attFsMod,attFsDelay,attFsReverb;
 
-    // Dropdowns
-    juce::ComboBox comboMod,comboDly,comboRvb;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
-        attModType,attDlyType,attRvbType;
-
-    // Load buttons
+    // Load buttons + v1.1 invisible hotspots over the baked art
     juce::TextButton btnLoadModel{"LOAD MODEL"},btnLoadIR{"LOAD IR"};
-    juce::TextButton btnClearModel{"×"},btnClearIR{"×"};
+    juce::TextButton fieldModel, fieldIR, dualBtn, typeBtn[3];
+    // v1.1 Dual Amp/IR: [1] --MIX-- [2] row under the DUAL AMP/IR button
+    juce::TextButton ampSelBtn[2];
+    juce::TextButton odBtn;                          // overdrive pedal capture pill
+    juce::TextButton powerBtn, abBtn, matchBtn;      // header power (bypass), [ ] (A/B), dual MATCH
+    juce::Slider trimSl[2] { juce::Slider(juce::Slider::LinearVertical, juce::Slider::NoTextBox),
+                             juce::Slider(juce::Slider::LinearVertical, juce::Slider::NoTextBox) };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attTrim[2];
+    // tuner animation state (v1.1.1 redesign)
+    float tunerDispCents = 0.f, tunerStrobe = 0.f, tunerSignal = 0.f;
+    double tunerLastTick = 0.0;
+    juce::Slider dualMix{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attDual;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attDualMix;
+    std::vector<juce::Component*> hiddenByTuner;
+    double fsDelayDownMs = 0.0;                      // v1.1.1 tap/hold timing on the DELAY footswitch
+    bool   fsDelayTapped = false;
+    bool   delayTapMode() const;
 
     // Scene bar (4 slots + 2 bank buttons)
     juce::TextButton sceneBtn[4];
@@ -183,11 +249,10 @@ private:
     // Header preset nav + save
     juce::ToggleButton presetPrev, presetNext;
     juce::TextButton headerSave{"SAVE"};
+    juce::TextButton headerExport{"EXPORT"}, headerImport{"IMPORT"};
 
-    // Tuner toggle button
-    juce::TextButton btnTuner{"TUNER"};
-
-    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR;
+    std::unique_ptr<juce::FileChooser> chooserModel,chooserIR,chooserExport,chooserImport,chooserOD,chooserLib;
+    juce::TooltipWindow tooltipWin{this, 600};
     static const juce::String kChainLabels[9];
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArcaneEclipseEditor)
 };
