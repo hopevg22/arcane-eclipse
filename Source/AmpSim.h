@@ -31,7 +31,7 @@ class AmpSim
 {
     static constexpr double kPi = 3.14159265358979323846;   // M_PI is not standard (MSVC)
 public:
-    enum Voicing { Clean = 0, Crunch, HighGain, CleanV2, CleanV3, Crunch2, Crunch3 };   // order = built-in amp index
+    enum Voicing { Clean = 0, Crunch, HighGain, CleanV2, CleanV3, Crunch2, Crunch3, HighGain2, HighGain3 };   // order = built-in amp index
 
     void prepare (double sampleRate)
     {
@@ -54,7 +54,7 @@ public:
         inHPF.reset(); interHPF.reset(); bright.reset(); preLo.reset();
         loSh.reset(); midPk.reset(); hiSh.reset(); pres.reset();
         punch.reset(); air.reset();
-        env = 0.0;
+        env = 0.0; gEnv = 0.0; gGain = 0.001; gOpen = false; gHold = 0;
     }
 
     void setVoicing (Voicing v) { voicing = v; recalc(); }
@@ -69,6 +69,7 @@ public:
 
     void processBlock (float* data, int numSamples)
     {
+        if (p.gate_db < 0.0) runGate (data, numSamples);
         if ((int) os.size() < numSamples * 2) os.resize ((size_t) numSamples * 2);
 
         // 2x upsample (zero-stuff + anti-image LPF, x2 gain compensation)
@@ -158,6 +159,8 @@ private:
                mid_freq, treble_range, air_freq, air_db, punch_freq, punch_db, out_trim;
         // capture-matched voicings (v1.1): bass shelf at 250 Hz before the clip, fixed 2nd-stage gain
         double pre_lo_db = 0, stage2_k = 0;
+        double gate_db = 0;     // input noise gate threshold (dBFS); 0 = off
+
     };
     static Prof profile (Voicing v)
     {
@@ -179,8 +182,14 @@ private:
             case CleanV3:  // matched to Hope's "Clean V4" capture: more breakup (tone lives in Eclipse 1x12 v3)
                            return { 40, 1500, 0.0, 1.2, 5.486, 1.0, 0.0, 0.0,
                                     0,   1.0, 0.0,  12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 3.43 };   // trim: same loudness as Clean v1
-            default:       return { 110, 700, 0.5, 8.0, 55.0, 2.0, 0.10, 0.20,
-                                    180, 2.2, 0.20, 10, 12, -1.0, 750, 12, 0, 0.0, 100, 4.5, 0.42 };
+            // High Gain v1-v3: matched to Hope's High_Gain_V1 / V2 / V4 captures (same DI), tone lives in Eclipse 4x12 v1-v3.
+            // v2: cab brightened ~2 dB above 2.5 kHz and an input gate at -55 dBFS (strings ringing between phrases).
+            default:       return { 125.15, 2200, 0.0, 98.28, 449.4, 1.5, 0.0616, 0.0,
+                                    125.15, 1.3, 0.0, 12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 0.543, -6.118, 4.541 };   // trims: same loudness as the old Lead
+            case HighGain2: return { 63.17, 2200, 0.0, 160.0, 731.6, 1.5, 0.1088, 0.0599,
+                                    63.17, 1.3, 0.0, 12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 0.507, -4.318, 4.845, -55.0 };
+            case HighGain3: return { 171.34, 2200, 0.0157, 24.06, 110.0, 1.5, 0.115, 0.1717,
+                                    171.34, 1.3, 0.0, 12, 10, 0.0, 650, 12, 0, 0.0, 0, 0.0, 0.582, 0.0, 9.560 };
         }
     }
 
@@ -231,10 +240,29 @@ private:
         return (float) (x * outGain);
     }
 
+    // Input noise gate (hysteresis 6 dB, hold 40 ms, release ~80 ms, range -60 dB)
+    void runGate (float* d, int n)
+    {
+        const double on = std::pow (10.0, p.gate_db / 20.0), off = on * 0.5012, floorG = 0.001;
+        const double det = std::exp (-1.0 / (fsBase * 0.001)), rel = std::exp (-1.0 / (fsBase * 0.080)),
+                     att = std::exp (-1.0 / (fsBase * 0.0005));
+        const int holdN = (int) (fsBase * 0.040);
+        for (int i = 0; i < n; ++i)
+        {
+            gEnv = det * gEnv + (1.0 - det) * std::abs ((double) d[i]);
+            if (gEnv > on)       { gOpen = true; gHold = holdN; }
+            else if (gEnv < off) { if (gHold > 0) --gHold; else gOpen = false; }
+            const double tgt = gOpen ? 1.0 : floorG;
+            gGain = tgt + (gGain - tgt) * (tgt > gGain ? att : rel);
+            d[i] = (float) (d[i] * gGain);
+        }
+    }
+
     static double clamp01 (double v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
     // state
     double fsBase = 48000, fs = 96000, envCoef = 0, env = 0;
+    double gEnv = 0, gGain = 0.001; bool gOpen = false; int gHold = 0;
     double drive = 1, drive2 = 1, bias2 = 0, asym2 = 0, tb1 = 0, tb2 = 0, outGain = 0.6;
     float  pGain = 0.5f, pBass = 0.5f, pMid = 0.5f, pTreb = 0.5f, pPres = 0.5f, pMast = 0.7f;
     Voicing voicing = Clean;

@@ -105,7 +105,9 @@ juce_add_binary_data(ArcaneEclipseAssets SOURCES
     Resources/cabs/cab_eclipse_1x12_v2.wav
     Resources/cabs/cab_eclipse_1x12_v3.wav
     Resources/cabs/cab_eclipse_2x12_v2.wav
-    Resources/cabs/cab_eclipse_2x12_v3.wav)
+    Resources/cabs/cab_eclipse_2x12_v3.wav
+    Resources/cabs/cab_eclipse_4x12_v2.wav
+    Resources/cabs/cab_eclipse_4x12_v3.wav)
 
 target_link_libraries(ArcaneEclipse PRIVATE
     ArcaneEclipseAssets

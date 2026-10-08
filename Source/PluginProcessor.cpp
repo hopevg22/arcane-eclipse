@@ -694,12 +694,12 @@ bool ArcaneEclipseProcessor::loadModelAny(const juce::File& f, int slot, juce::S
 }
 
 // ── Built-in amps + cabinets, library refs (v1.1) ────────────────────────────
-static const char* const kAmpKeys[] = { "clean", "crunch", "lead", "clean2", "clean3", "crunch2", "crunch3" };   // index = AmpSim::Voicing; keys never change
-static const char* const kAmpNames[] = { "Eclipse Clean v1", "Eclipse Crunch v1", "Eclipse Lead", "Eclipse Clean v2", "Eclipse Clean v3",
-                                         "Eclipse Crunch v2", "Eclipse Crunch v3" };
-static const char* const kCabKeys[] = { "1x12", "2x12", "4x12", "1x12v2", "1x12v3", "2x12v2", "2x12v3" };
-static const char* const kCabNames[] = { "Eclipse 1x12 v1", "Eclipse 2x12 v1", "Eclipse 4x12", "Eclipse 1x12 v2", "Eclipse 1x12 v3",
-                                         "Eclipse 2x12 v2", "Eclipse 2x12 v3" };
+static const char* const kAmpKeys[] = { "clean", "crunch", "lead", "clean2", "clean3", "crunch2", "crunch3", "highgain2", "highgain3" };   // index = AmpSim::Voicing; keys never change
+static const char* const kAmpNames[] = { "Eclipse Clean v1", "Eclipse Crunch v1", "Eclipse High Gain v1", "Eclipse Clean v2", "Eclipse Clean v3",
+                                         "Eclipse Crunch v2", "Eclipse Crunch v3", "Eclipse High Gain v2", "Eclipse High Gain v3" };
+static const char* const kCabKeys[] = { "1x12", "2x12", "4x12", "1x12v2", "1x12v3", "2x12v2", "2x12v3", "4x12v2", "4x12v3" };
+static const char* const kCabNames[] = { "Eclipse 1x12 v1", "Eclipse 2x12 v1", "Eclipse 4x12 v1", "Eclipse 1x12 v2", "Eclipse 1x12 v3",
+                                         "Eclipse 2x12 v2", "Eclipse 2x12 v3", "Eclipse 4x12 v2", "Eclipse 4x12 v3" };
 
 juce::String ArcaneEclipseProcessor::builtinAmpName(int i) { return kAmpNames[juce::jlimit(0, kNumBuiltinAmps - 1, i)]; }
 juce::String ArcaneEclipseProcessor::builtinCabName(int i) { return kCabNames[juce::jlimit(0, kNumBuiltinCabs - 1, i)]; }
@@ -778,10 +778,12 @@ bool ArcaneEclipseProcessor::loadBuiltinCab(int c, int slot)
     if (c < 0 || c >= kNumBuiltinCabs) return false;
     static const void* const data[] = { BinaryData::cab_eclipse_1x12_wav, BinaryData::cab_eclipse_2x12_wav, BinaryData::cab_eclipse_4x12_wav,
                                         BinaryData::cab_eclipse_1x12_v2_wav, BinaryData::cab_eclipse_1x12_v3_wav,
-                                        BinaryData::cab_eclipse_2x12_v2_wav, BinaryData::cab_eclipse_2x12_v3_wav };
+                                        BinaryData::cab_eclipse_2x12_v2_wav, BinaryData::cab_eclipse_2x12_v3_wav,
+                                        BinaryData::cab_eclipse_4x12_v2_wav, BinaryData::cab_eclipse_4x12_v3_wav };
     static const int sizes[] = { BinaryData::cab_eclipse_1x12_wavSize, BinaryData::cab_eclipse_2x12_wavSize, BinaryData::cab_eclipse_4x12_wavSize,
                                  BinaryData::cab_eclipse_1x12_v2_wavSize, BinaryData::cab_eclipse_1x12_v3_wavSize,
-                                 BinaryData::cab_eclipse_2x12_v2_wavSize, BinaryData::cab_eclipse_2x12_v3_wavSize };
+                                 BinaryData::cab_eclipse_2x12_v2_wavSize, BinaryData::cab_eclipse_2x12_v3_wavSize,
+                                 BinaryData::cab_eclipse_4x12_v2_wavSize, BinaryData::cab_eclipse_4x12_v3_wavSize };
     auto& a = amps[slotIdx(slot)];
     a.conv.loadImpulseResponse(data[c], (size_t) sizes[c], juce::dsp::Convolution::Stereo::yes,
         juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
