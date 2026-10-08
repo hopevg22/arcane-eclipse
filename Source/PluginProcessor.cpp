@@ -103,6 +103,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ArcaneEclipseProcessor::crea
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmp1Trim, "Amp 1 Level", Range(-24.f,24.f,.1f), 0.f, dbTxt));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idAmp2Trim, "Amp 2 Level", Range(-24.f,24.f,.1f), 0.f, dbTxt));
     p.push_back(std::make_unique<juce::AudioParameterBool> (idDoubler, "Doubler", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool> (idNormalize, "Normalize Captures", true));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idDoublerWidth, "Doubler Width", Range(0.f,1.f,.01f), .6f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int){ return juce::String(juce::roundToInt(v*100)) + "%"; })));
     p.push_back(std::make_unique<juce::AudioParameterFloat>(idDualMix, "Dual Mix", Range(0.f,1.f,.01f), .5f,
@@ -538,6 +539,10 @@ void ArcaneEclipseProcessor::runAmp(AmpSlot& a, const float* in, float* out, int
         return;
     }
     runNAM(a, in, out, numSamples);
+    if (a.normDb != 0.f && apvts.getRawParameterValue(idNormalize)->load() > .5f) {
+        const float g = juce::Decibels::decibelsToGain(a.normDb);
+        for (int n = 0; n < numSamples; ++n) out[n] *= g;
+    }
 }
 
 // Runs one NAM model on a mono block, resampling to/from 48 kHz when needed.
@@ -612,6 +617,62 @@ bool ArcaneEclipseProcessor::isDualActive() const
         && (hasAmp(amps[1]) || amps[1].irLoaded);
 }
 
+// Playing level of a capture: run 4 s of real guitar (Hope's DI, -24 dBFS RMS, embedded)
+// through it at the default GAIN and measure the output. NAM's own "loudness" metadata
+// is measured on a test signal and barely tracks how loud a clean vs a high-gain capture
+// sounds when played, so this is what the Normalize option uses (metadata as fallback).
+static float measureCaptureLevelDb(NeuralAudio::NeuralModel& m, float preGainDb)
+{
+    static const std::vector<float> ref = []{
+        std::vector<float> v;
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatReader> r(wav.createReaderFor(
+            new juce::MemoryInputStream(BinaryData::level_ref_di_wav, BinaryData::level_ref_di_wavSize, false), true));
+        if (r != nullptr) {
+            juce::AudioBuffer<float> b(1, (int) r->lengthInSamples);
+            r->read(&b, 0, (int) r->lengthInSamples, 0, true, false);
+            v.assign(b.getReadPointer(0), b.getReadPointer(0) + b.getNumSamples());
+        }
+        return v;
+    }();
+    if (ref.empty()) return std::numeric_limits<float>::quiet_NaN();
+    const float g = juce::Decibels::decibelsToGain(preGainDb);
+    std::vector<float> in(64), out(64);
+    double acc = 0.0; size_t cnt = 0;
+    const size_t skip = 24000;                                  // let the model settle (0.5 s)
+    for (size_t pos = 0; pos + 64 <= ref.size(); pos += 64) {
+        for (int i = 0; i < 64; ++i) in[(size_t) i] = ref[pos + (size_t) i] * g;
+        m.Process(in.data(), out.data(), 64);
+        if (pos >= skip) for (int i = 0; i < 64; ++i) { acc += (double) out[(size_t) i] * out[(size_t) i]; ++cnt; }
+    }
+    m.Prewarm();                                                // clear state before real use
+    if (cnt == 0 || ! (acc > 0.0)) return std::numeric_limits<float>::quiet_NaN();
+    return (float) (10.0 * std::log10(acc / (double) cnt));
+}
+
+// Measuring takes a few hundred ms, so each capture is measured once and the result kept
+// (keyed by the file's MD5, so renamed/moved/.aecap-unpacked copies share it) in memory
+// and in <app data>/ArcaneEclipse/capture_levels.xml.
+static float cachedCaptureLevelDb(const juce::File& f, NeuralAudio::NeuralModel& m, float preGainDb)
+{
+    static juce::CriticalSection lock;
+    static std::unique_ptr<juce::PropertiesFile> store;
+    const juce::ScopedLock sl(lock);
+    if (store == nullptr) {
+        juce::PropertiesFile::Options o;
+        o.applicationName = "capture_levels"; o.filenameSuffix = ".xml"; o.folderName = "ArcaneEclipse";
+        o.osxLibrarySubFolder = "Application Support"; o.storageFormat = juce::PropertiesFile::storeAsXML;
+        store = std::make_unique<juce::PropertiesFile>(
+            juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                .getChildFile("ArcaneEclipse").getChildFile("capture_levels.xml"), o);
+    }
+    const juce::String key = "v1_" + juce::MD5(f).toHexString() + "_" + juce::String((int) std::lround(preGainDb * 10.f));
+    if (store->containsKey(key)) return (float) store->getDoubleValue(key);
+    const float lv = measureCaptureLevelDb(m, preGainDb);
+    if (std::isfinite(lv)) { store->setValue(key, (double) lv); store->saveIfNeeded(); }
+    return lv;
+}
+
 bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file, int slot)
 {
     if (!file.existsAsFile()) return false;
@@ -620,9 +681,16 @@ bool ArcaneEclipseProcessor::loadNAMModel(const juce::File& file, int slot)
         auto* raw = namLoader.CreateFromFile(file.getFullPathName().toStdString());
         if (!raw) return false;
         std::unique_ptr<NeuralAudio::NeuralModel> model(raw);
+        // Captures carry whatever level the reamp return was set to (Hope's range ~25 dB).
+        // Normalize: measured playing level -> -20 dBFS; files that can't be measured fall
+        // back to the trainer's loudness metadata (0 dB if none).
+        const float defGainDb = juce::jmap(4.2f, 0.f, 10.f, -6.f, 18.f);
+        const float lv = cachedCaptureLevelDb(file, *model, defGainDb);
+        const float nDb = std::isfinite(lv) ? (kCaptureTargetDb - lv) : model->GetRecommendedOutputDBAdjustment();
         {
             const juce::ScopedLock lock(getCallbackLock());
             a.model = std::move(model);
+            a.normDb = juce::jlimit(-30.f, 30.f, nDb);
             a.builtin = -1;
             a.namName = file.getFileNameWithoutExtension();
             a.namPath = refForFile(file);

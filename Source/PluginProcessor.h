@@ -57,7 +57,8 @@ public:
     // "an amp is loaded": a NAM/.aecap model OR a built-in amp
     bool isNAMLoaded(int slot = 0) const { return hasAmp(amps[slotIdx(slot)]); }
     bool isIRLoaded (int slot = 0) const { return amps[slotIdx(slot)].irLoaded; }
-    bool isDualActive() const;          // Dual on AND amp 2 has a model or an IR
+    bool isDualActive() const;
+    float getCaptureNormDb(int slot = 0) const { return amps[slotIdx(slot)].model ? amps[slotIdx(slot)].normDb : 0.f; }          // Dual on AND amp 2 has a model or an IR
 
     // ── Built-in amps + cabinets (v1.1) and the Amari Library ────────────────
     // A model/IR is identified by a "ref": "builtin:amp/clean", "builtin:cab/4x12",
@@ -189,11 +190,14 @@ public:
     // Stereo doubler (v1.1.1)
     static constexpr auto idDoubler      = "doubler";
     static constexpr auto idDoublerWidth = "doublerWidth";
+    static constexpr auto idNormalize    = "normalizeCaptures";   // v1.1: level every capture to the same playing level
+    static constexpr float kCaptureTargetDb = -20.f;              // normalized capture output, dBFS RMS on the reference DI
 
 private:
     // One amp = NAM model (+ its own 48 kHz resamplers) + cabinet IR.
     struct AmpSlot {
         std::unique_ptr<NeuralAudio::NeuralModel> model;
+        float normDb = 0.f;                      // output correction from the capture's "loudness" metadata (0 if none)
         juce::CatmullRomInterpolator rsIn, rsOut;
         std::vector<float> upIn, upOut;          // 48 kHz work buffers
         juce::dsp::Convolution conv;

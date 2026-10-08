@@ -1835,6 +1835,14 @@ void ArcaneEclipseEditor::showFieldMenu(bool ir)
         m.addSubMenu("Remove from library", rm, ! tmp.isEmpty());
         removeCandidates=rmFiles;
     }
+    if(! ir){   // capture level normalization (global to the patch, applies to both amps)
+        const bool normOn = proc.apvts.getRawParameterValue(P::idNormalize)->load() > .5f;
+        const float nd = proc.getCaptureNormDb(a);
+        juce::String t = "Normalize capture levels";
+        if(proc.isNAMLoaded(a) && proc.getBuiltinAmp(a) < 0)
+            t += nd != 0.f ? "  (" + juce::String(nd > 0 ? "+" : "") + juce::String(nd, 1) + " dB)" : juce::String("  (no level info in file)");
+        m.addItem(6, t, true, normOn);
+    }
     m.addItem(3, "Open library folder");
     m.addItem(2, ir ? "No cab (bypass)" : "Clear model", loaded);
 
@@ -1850,6 +1858,8 @@ void ArcaneEclipseEditor::showFieldMenu(bool ir)
                         "The library folder is:\n" + libDir.getFullPathName());
             }
             else if(r==5){ addToLibrary(ir); return; }
+            else if(r==6){ if(auto* prm=proc.apvts.getParameter(P::idNormalize))
+                               prm->setValueNotifyingHost(prm->getValue() > .5f ? 0.f : 1.f); }
             else if(r>=3000 && removeCandidates!=nullptr && r-3000<removeCandidates->size()){
                 removeFromLibrary((*removeCandidates)[r-3000]); return; }
             else if(r>=100 && r<1000){ if(ir) proc.loadBuiltinCab(r-100,a); else proc.loadBuiltinAmp(r-100,a); }
